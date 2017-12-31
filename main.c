@@ -8,12 +8,13 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <sys/time.h>
 
 #define max(x,y) ((x) > (y) ? (x) : (y))
 
 #define MAX_NAME_LENGTH 128
 #define DEFAULT_TIMEOUT 1.0
-#define VERBOSE 1
+#define VERBOSE 0
 
 static void *_new(size_t size) {
     void *tmp = malloc(size);
@@ -272,6 +273,10 @@ int main(int argc, char *argv[]) {
 
     /* BEGIN MY CODE */
 
+    struct timeval now;
+    if (gettimeofday(&now, NULL))
+        err(1, "kSIfOmBSAqQ8");
+
     files_alloc = 10;
     files = calloc(files_alloc, sizeof(*files));
     if (!files)
@@ -285,7 +290,8 @@ int main(int argc, char *argv[]) {
         .name = ".",
         .mode = S_IFDIR | 0755,
         .nlink = 2,
-        //FIXME times
+        .atime = now.tv_sec,
+        .mtime = now.tv_sec,
     };
     files[1] = buf; // Must be inode 1.  Why?
 
@@ -298,6 +304,8 @@ int main(int argc, char *argv[]) {
         .mode = S_IFREG | 0444,
         .nlink = 1,
         .size = 4 << 10,
+        .atime = now.tv_sec,
+        .mtime = now.tv_sec,
     };
     files[files_count++] = buf;
 
@@ -308,6 +316,8 @@ int main(int argc, char *argv[]) {
         .mode = S_IFREG | 0444,
         .nlink = 1,
         .size = 4 << 20,
+        .atime = now.tv_sec,
+        .mtime = now.tv_sec,
     };
     files[files_count++] = buf;
 
@@ -318,6 +328,8 @@ int main(int argc, char *argv[]) {
         .mode = S_IFREG | 0444,
         .nlink = 1,
         .size = 4UL << 30,
+        .atime = now.tv_sec,
+        .mtime = now.tv_sec,
     };
     files[files_count++] = buf;
 
@@ -328,6 +340,8 @@ int main(int argc, char *argv[]) {
         .mode = S_IFREG | 0444,
         .nlink = 1,
         .size = 4UL << 40,
+        .atime = now.tv_sec,
+        .mtime = now.tv_sec,
     };
     files[files_count++] = buf;
 
@@ -338,6 +352,8 @@ int main(int argc, char *argv[]) {
         .mode = S_IFREG | 0444,
         .nlink = 1,
         .size = 4UL << 50,
+        .atime = now.tv_sec,
+        .mtime = now.tv_sec,
     };
     files[files_count++] = buf;
 
