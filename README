@@ -1,0 +1,42 @@
+
+`otfFS` — File system of on-the-fly test data
+==============================================
+
+Goal
+----
+
+Provide a file in the Linux file system, which is backed by an
+executable.  Reading the file delivers random data, but the same
+random data for each process that reads the file.  So the file looks
+like a (potentially huge) file of fixed random data.
+
+Use case
+--------
+
+Test if a web server is able to deliver terabyte files, without
+actually creating them.
+
+    $ curl 'http://localhost:8080/foo/data1' | cmp - ./foo/data1
+
+The file `data1` does not exist, but is created on the fly by the FUSE
+process, which is mounted on `./foo`.
+
+
+
+Learning from others
+====================
+
+    $ https://github.com/libfuse/libfuse.git
+    $ cd libfuse/example/
+    $ gcc -Wall hello.c $(pkg-config fuse3 --cflags --libs) -o hello
+
+Make mountpoint `foo`.  Run in foreground (`-f`), and set user and
+group from the `foo` directory.  Maybe do this in a separate terminal:
+
+    $ mkdir foo
+    $ ./hello -f $(stat -c '-o uid=%u -o gid=%g' foo) foo
+
+Umounting is by terminating the program (through an exit handler it
+has installed), or through
+
+    $ fusermount -u foo

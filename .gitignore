@@ -1,0 +1,5 @@
+libfuse
+*.o
+fakefs
+foo
+otffs
