@@ -1,6 +1,7 @@
 #define FUSE_USE_VERSION 31
 #define _GNU_SOURCE // reallocarray
 
+#include <dirent.h>
 #include <err.h>
 #include <fuse_lowlevel.h>
 #include <stdio.h>
@@ -8,6 +9,7 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <sys/mman.h>
 #include <sys/time.h>
 
 #define max(x,y) ((x) > (y) ? (x) : (y))
@@ -15,6 +17,12 @@
 #define MAX_NAME_LENGTH 128
 #define DEFAULT_TIMEOUT 1.0
 #define VERBOSE 0
+
+// this is not assert: not intended to be disabled in non-debug mode
+#define ERRIF(c) do {                                             \
+        if (c)                                                    \
+            err(1, #c " at " __FILE__ ":%d because", __LINE__);   \
+    } while (0)
 
 static void *_new(size_t size) {
     void *tmp = malloc(size);
@@ -25,17 +33,24 @@ static void *_new(size_t size) {
 #define new(ty) _new(sizeof(ty))
 #define zero(ptr) memset(ptr, 0, sizeof(*ptr))
 
+enum type { real, fake };
+
 struct file {
     const char *name;
+    enum type type;
     mode_t mode;
     nlink_t nlink;
     off_t size;
     time_t atime, mtime;
 };
 
+int rootFd = -1;
+
 struct file **files = NULL;
 unsigned int files_count = 0;
 unsigned int files_alloc = 0;
+
+struct timeval now; // time of starting `otffs`
 
 
 
@@ -114,8 +129,8 @@ static void otf_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
             size_t oldsize = s;
             s += fuse_add_direntry(req, NULL, 0, files[i]->name, NULL, 0);
             p = (char *)realloc(p, s);
-            if (!p)
-                err(1, "93javfPGcul2");
+            ERRIF(!p);
+            
             otf_stat(&buf, i);
             fuse_add_direntry(req, p + oldsize, s - oldsize, files[i]->name,
                               &buf, (off_t)s);
@@ -127,14 +142,15 @@ static void otf_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
     }
 }
 
+
+
 static void otf_lookup(fuse_req_t req, fuse_ino_t parent,
                             const char *name) {
 
     if (VERBOSE)
         printf("lookup(parent=%ld, name=%s)\n", parent, name);
 
-    if (!files)
-        err(1, "qATg3A0anTGw");
+    ERRIF(!files);
 
     if (!files[parent]) {
         fuse_reply_err(req, ENOENT);
@@ -175,14 +191,11 @@ static void otf_lookup(fuse_req_t req, fuse_ino_t parent,
 
 static void otf_open(fuse_req_t req, fuse_ino_t ino,
                        struct fuse_file_info *fi) {
-
-    (void)fi;
     
     if (VERBOSE)
         printf("open(ino=%ld)\n", ino);
 
-    if (!files)
-        err(1, "wPzZilxiVUPO");
+    ERRIF(!files);
 
     if (!files[ino]) {
         fuse_reply_err(req, ENOENT);
@@ -194,25 +207,69 @@ static void otf_open(fuse_req_t req, fuse_ino_t ino,
         return;
     }
 
-    /* FIXME check permissions?  Should be done by kernel, see `-o
-       default_permissions` */
-
-    /* maybe set aside resources for this?  multithreaded? */
+    fi->fh = 0;
+    
+    if (files[ino]->type == real) {
+        int fd = openat(rootFd, files[ino]->name, O_RDONLY);
+        ERRIF(fd == -1);
+        fi->fh = (unsigned long)fd;
+    }
 
     fuse_reply_open(req, fi);
 }
 
 
 
+void otf_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+    
+    if (VERBOSE)
+        printf("release(ino=%ld)\n", ino);
+
+    ERRIF(!files);
+
+    if (!files[ino]) {
+        fuse_reply_err(req, ENOENT);
+        return;
+    }
+
+    if (files[ino]->type == real) {
+        close((int)(fi->fh));
+    }
+
+    
+}
+
+
+
+static void otf_fill_counting(char *buf, off_t off, size_t amount) {
+
+    size_t chunk = sizeof(unsigned int);
+    size_t steps = amount / chunk;
+    size_t rem = amount % chunk;
+
+    if (VERBOSE)
+        printf("fill_counting(off=%ld, amount=%ld)\n", off, amount);
+
+    unsigned int value = (unsigned int)off / (unsigned int)chunk;
+    
+    for (size_t i = 0; i < steps; i++) {
+        memcpy(&buf[i * chunk], &value, chunk);
+        value++;
+    }
+    if (rem) {
+        memcpy(&buf[amount - rem], &value, rem);
+    }
+}
+
+
+
 static void otf_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
                       struct fuse_file_info *fi) {
-    (void)fi;
 
     if (VERBOSE)
         printf("read(ino=%ld, size=%zu, off=%zu)\n", ino, size, off);
 
-    if (!files)
-        err(1, "K4Zaduz01Box");
+    ERRIF(!files);
 
     if (!files[ino]) {
         fuse_reply_err(req, ENOENT);
@@ -226,12 +283,28 @@ static void otf_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 
     size_t amount = min(size, (size_t)(files[ino]->size - off));
 
-    char *buf = malloc(amount);
-    if (!buf)
-        err(1, "uEZgAiOE6fK3");
+    if (amount <=0) {
+        fuse_reply_buf(req, NULL, 0);
+        return;
+    }
+
+    if (files[ino]->type == real) {
+
+        char *buf = mmap(NULL, amount, PROT_READ, MAP_SHARED,
+                         (int)(fi->fh), off);
+        ERRIF(buf == MAP_FAILED); 
+
+        fuse_reply_buf(req, buf, amount);
         
-    for (unsigned int i = 0; i < amount; i++)
-        buf[i] = (char)((off + i) % 0xff);
+        ERRIF(munmap(buf, amount));
+        
+        return;
+    }
+
+    char *buf = malloc(amount);
+    ERRIF(!buf);
+
+    otf_fill_counting(buf, off, amount);
 
     fuse_reply_buf(req, buf, amount);
         
@@ -247,6 +320,33 @@ static struct fuse_lowlevel_ops ops = {
     .read = otf_read,
 };
 
+
+
+void otf_addFile(const char * name, enum type type, off_t size, mode_t mode) {
+
+    if (files_count >= files_alloc) {
+        size_t old = files_alloc;
+        files_alloc = max(2 * files_alloc, 10);
+        files = reallocarray(files, files_alloc, sizeof(*files));
+        ERRIF(!files);
+        for (size_t i = old; i < files_alloc; i++)
+            files[i] = NULL;
+    }
+
+    struct file *buf = new(struct file);    
+    zero(buf);
+
+    *buf = (struct file){
+        .name = name,
+        .type = type,
+        .mode = S_IFREG | (mode & 0555),
+        .nlink = 1,
+        .size = size,
+        .atime = now.tv_sec,
+        .mtime = now.tv_sec,
+    };
+    files[files_count++] = buf;
+}
 
 
 int main(int argc, char *argv[]) {
@@ -273,99 +373,66 @@ int main(int argc, char *argv[]) {
 
     /* BEGIN MY CODE */
 
-    struct timeval now;
-    if (gettimeofday(&now, NULL))
-        err(1, "kSIfOmBSAqQ8");
+    ERRIF(gettimeofday(&now, NULL));
 
     files_alloc = 10;
     files = calloc(files_alloc, sizeof(*files));
-    if (!files)
-        err(1, "4SZFhtiLWMCR");
+    ERRIF(!files);
+
+    { // add root directory
+        struct file *buf = NULL;
     
-    struct file *buf = NULL;
+        buf = new(struct file);
+        zero(buf);
+        *buf = (struct file){
+            .name = ".",
+            .mode = S_IFDIR | 0755,
+            .nlink = 2,
+            .atime = now.tv_sec,
+            .mtime = now.tv_sec,
+        };
+        files[FUSE_ROOT_ID] = buf; // Must be inode 1.  Why?
+        files_count = FUSE_ROOT_ID + 1;
+    }
+
+
+
+    { // add entries for real files
+        DIR *root = opendir(opts.mountpoint);
+        ERRIF(!root);
+
+        rootFd = dup(dirfd(root));
+        
+        struct dirent *e;
+        while ((e = readdir(root))) {
+            if (e->d_type != DT_REG)
+                continue;
+
+            struct stat buf;
+            ERRIF(fstatat(rootFd, e->d_name, &buf, AT_SYMLINK_NOFOLLOW));
+
+            char *name = strndup(e->d_name, 127);
+            ERRIF(!name);
+            
+            otf_addFile(name, real, buf.st_size, buf.st_mode);
+            
+        }
+        closedir(root);
+    }
+
+
     
-    buf = new(struct file);
-    zero(buf);
-    *buf = (struct file){
-        .name = ".",
-        .mode = S_IFDIR | 0755,
-        .nlink = 2,
-        .atime = now.tv_sec,
-        .mtime = now.tv_sec,
-    };
-    files[1] = buf; // Must be inode 1.  Why?
-
-    files_count = 2;
-    
-    buf = new(struct file);
-    zero(buf);
-    *buf = (struct file){
-        .name = "size_4kiB",
-        .mode = S_IFREG | 0444,
-        .nlink = 1,
-        .size = 4 << 10,
-        .atime = now.tv_sec,
-        .mtime = now.tv_sec,
-    };
-    files[files_count++] = buf;
-
-    buf = new(struct file);
-    zero(buf);
-    *buf = (struct file){
-        .name = "size_4MiB",
-        .mode = S_IFREG | 0444,
-        .nlink = 1,
-        .size = 4 << 20,
-        .atime = now.tv_sec,
-        .mtime = now.tv_sec,
-    };
-    files[files_count++] = buf;
-
-    buf = new(struct file);
-    zero(buf);
-    *buf = (struct file){
-        .name = "size_4GiB",
-        .mode = S_IFREG | 0444,
-        .nlink = 1,
-        .size = 4UL << 30,
-        .atime = now.tv_sec,
-        .mtime = now.tv_sec,
-    };
-    files[files_count++] = buf;
-
-    buf = new(struct file);
-    zero(buf);
-    *buf = (struct file){
-        .name = "size_4TiB",
-        .mode = S_IFREG | 0444,
-        .nlink = 1,
-        .size = 4UL << 40,
-        .atime = now.tv_sec,
-        .mtime = now.tv_sec,
-    };
-    files[files_count++] = buf;
-
-    buf = new(struct file);
-    zero(buf);
-    *buf = (struct file){
-        .name = "size_4PiB",
-        .mode = S_IFREG | 0444,
-        .nlink = 1,
-        .size = 4UL << 50,
-        .atime = now.tv_sec,
-        .mtime = now.tv_sec,
-    };
-    files[files_count++] = buf;
-
-
-
+    otf_addFile("data1", fake, 4UL << 10, 0444);
+    otf_addFile("data2", fake, 4UL << 20, 0444);
+    otf_addFile("data3", fake, 4UL << 30, 0444);
+    otf_addFile("data4", fake, 4UL << 40, 0444);
+    otf_addFile("data5", fake, 4UL << 50, 0444);
     
     for (unsigned int i = 0; i < files_count; i++) {
         if (!files[i])
             continue;
         printf("%x: %03o %s\n", i, (files[i]->mode & 0777), files[i]->name);
     }
-    
 
     /* END MY CODE */
 
@@ -402,21 +469,3 @@ int main(int argc, char *argv[]) {
 
     return ret ? 1 : 0;
 }
-
-
-
-#if 0
-void add_file(size_t ino, struct stat *buf) {
-    if (files_count >= files_alloc) {
-        size_t old = files_alloc;
-        files_alloc = max(2 * files_alloc, 10);
-        files = reallocarray(files, files_alloc, sizeof(*files));
-        if (!files)
-            err(1, "gAEGxirdhlF2");
-        for (size_t i = old; i < files_alloc; i++)
-            files[i] = NULL;
-    }
-
-    files[files_count++] = buf;
-}
-#endif

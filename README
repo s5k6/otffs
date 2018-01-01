@@ -5,22 +5,62 @@
 Goal
 ----
 
-Provide a file in the Linux file system, which is backed by an
-executable.  Reading the file delivers random data, but the same
-random data for each process that reads the file.  So the file looks
-like a (potentially huge) file of fixed random data.
+Provide arbitrarily large files of pseudo-random test data, without
+consuming disk space.
 
-Use case
---------
+Use case:
 
-Test if a web server is able to deliver terabyte files, without
-actually creating them.
+    $ curl 'http://localhost:8080/foo/data3' | cmp - ./foo/data3
 
-    $ curl 'http://localhost:8080/foo/data1' | cmp - ./foo/data1
+You don't want to create these files on your SSD:
 
-The file `data1` does not exist, but is created on the fly by the FUSE
-process, which is mounted on `./foo`.
+    $ ls -l foo
+    -r--r--r-- 1 sk users 4.1k Jan  1 21:09 data1
+    -r--r--r-- 1 sk users 4.2M Jan  1 21:09 data2
+    -r--r--r-- 1 sk users 4.3G Jan  1 21:09 data3
+    -r--r--r-- 1 sk users 4.4T Jan  1 21:09 data4
+    -r--r--r-- 1 sk users 4.6P Jan  1 21:09 data5
 
+Plan: Use FUSE [1] to provide a file system, which is backed by an
+executable instead of disk space.  Reading from a file in this
+on-the-fly FS delivers data from a pseudo random number generator.
+Thus, every read a the same offset of the same file will produce the
+same data.
+
+
+Using
+-----
+
+    $ make
+
+Create mountpoint directory, and add some files:
+
+    $ mkdir foo
+    $ date > foo/realfile
+
+Run `otffs` on top of `foo`, maybe do this in another terminal.
+
+    $ ./otffs foo
+
+Check out the files in `foo`, try to read the large ones...
+
+    $ ls -l foo
+    total 0
+    -r--r--r-- 1 sk users 4.1k Jan  1 21:21 data1
+    -r--r--r-- 1 sk users 4.2M Jan  1 21:21 data2
+    -r--r--r-- 1 sk users 4.3G Jan  1 21:21 data3
+    -r--r--r-- 1 sk users 4.4T Jan  1 21:21 data4
+    -r--r--r-- 1 sk users 4.6P Jan  1 21:21 data5
+    -r-------- 1 sk users   29 Jan  1 21:21 realfile
+
+
+TODO
+====
+
+Date is not pseudorandom, but plain enumeration of 4-byte integers.
+
+Right now, the number, names, sizes, modes,and contents of the fake
+files are fixed.  Make this configurable.
 
 
 Learning from others
@@ -40,3 +80,8 @@ Umounting is by terminating the program (through an exit handler it
 has installed), or through
 
     $ fusermount -u foo
+
+
+
+____________________
+[1] https://github.com/libfuse/libfuse/
