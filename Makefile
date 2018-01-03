@@ -7,7 +7,7 @@ OBJ = $(patsubst %.c,%.o,$(SRC))
 TARGETS = otffs
 
 
-.PHONY: all clean distclean
+.PHONY: all clean distclean test
 
 all : $(TARGETS)
 
@@ -17,10 +17,18 @@ clean:
 distclean: clean
 	rm -f $(TARGETS)
 
+test : all cmprep
+	fusermount -u foo || true
+	mkdir -p foo
+	test -e foo/random || dd if=/dev/urandom of=foo/random bs=1k count=100;
+	./otffs foo &
+	until test -r foo/repeat_short; do sleep 0.2; done
+	./cmprep foo/random foo/repeat_short
+	./cmprep foo/random foo/repeat_long
+	fusermount -u foo
 
+otffs : main.c
+	gcc -o $@ $(CFLAGS) $(shell pkg-config fuse3 --cflags --libs) $<
 
-otffs : $(OBJ)
-	gcc -o $@ $(shell pkg-config fuse3 --libs) $<
-
-main.o : main.c
-	gcc $(CFLAGS) -c $(shell pkg-config fuse3 --cflags) $<
+cmprep : cmprep.c
+	gcc -o $@ $(CFLAGS) $<
