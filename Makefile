@@ -1,8 +1,9 @@
 
-CFLAGS = -std=c99 -g -Wall -Wextra -Wpedantic -Wbad-function-cast -Wconversion -Wwrite-strings -Wstrict-prototypes
+CFLAGS = -std=c99 -g -Wall -Wextra -Wpedantic -Wbad-function-cast -Wconversion -Wwrite-strings -Wstrict-prototypes -Werror
 
 SRC = $(wildcard *.c)
 OBJ = $(patsubst %.c,%.o,$(SRC))
+GCH = $(patsubst %,%.gch,$(wildcard *.h))
 
 TARGETS = otffs
 
@@ -12,23 +13,37 @@ TARGETS = otffs
 all : $(TARGETS)
 
 clean:
-	rm -f $(OBJ)
+	rm -f $(OBJ) $(GCH)
 
 distclean: clean
 	rm -f $(TARGETS)
 
-test : all cmprep
-	fusermount -u foo || true
-	mkdir -p foo
-	test -e foo/random || dd if=/dev/urandom of=foo/random bs=1k count=100;
-	./otffs foo &
-	until test -r foo/repeat_short; do sleep 0.2; done
-	./cmprep foo/random foo/repeat_short
-	./cmprep foo/random foo/repeat_long
-	fusermount -u foo
+test : all cmprep 
+	fusermount -u mnt || true
+	test -e mnt/random || dd if=/dev/urandom of=mnt/template bs=1k count=100;
+	./otffs mnt &
+	ls -T0 --color=auto --si -l mnt
+	until test -r mnt/shorter; do sleep 0.2; done
+	./cmprep mnt/template mnt/shorter
+	./cmprep mnt/template mnt/longer
+	cmp README mnt/README
+	fusermount -u mnt
 
-otffs : main.c
-	gcc -o $@ $(CFLAGS) $(shell pkg-config fuse3 --cflags --libs) $<
+otffs : otffs.o fmap.o parser.o
+	gcc -o $@ $(shell pkg-config fuse3 --libs) $^
 
-cmprep : cmprep.c
-	gcc -o $@ $(CFLAGS) $<
+cmprep : cmprep.o fmap.o
+	gcc -o $@ $(CFLAGS) $^
+
+parsetest : parsetest.o parser.o avl_tree.o
+
+fmap.o : fmap.c fmap.h
+
+parser.o : parser.c parser.h
+
+otffs.o : otffs.c
+	gcc -c $(CFLAGS) $(shell pkg-config fuse3 --cflags) $^
+
+%.o : %.c
+	gcc -c $(CFLAGS) $^
+

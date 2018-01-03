@@ -1,64 +1,14 @@
 
 /* BEGIN COPY CODE */
 
-#include <dirent.h>
+#include "fmap.h"
+#include "macros.h"
 #include <err.h>
-#include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <unistd.h>
-
-
-
-// this is not assert: not intended to be disabled in non-debug mode
-#define ERRIF(c) do {                                             \
-        if (c)                                                    \
-            err(1, #c " at " __FILE__ ":%d because", __LINE__);   \
-    } while (0)
-
-
-
-#define zero(ptr) memset(ptr, 0, sizeof(*ptr))
-
-
-
-/* Frontend to mapping files into memory.  Need to adjust for page
-   sizes, see mmap(2). */
-
-struct mapping {
-    char *buf; // points to buffer as requested
-    void *adjPtr; // real ptr returned from mmap
-    size_t adjLen; // real length mapped by mmap
-};
-
-static void otf_map(struct mapping *m, int fd, size_t off, size_t len) {
-    size_t
-        ps = (size_t)sysconf(_SC_PAGE_SIZE),
-        adjOff = (off / ps) * ps,
-        delta = off - adjOff;
-    m->adjLen = len + delta;
-    //warnx("off=%zu len=%zu delta=%zu", off, len, delta);
-    m->adjPtr = mmap(NULL, m->adjLen, PROT_READ, MAP_SHARED, fd, (off_t)adjOff);
-    ERRIF(m->adjPtr == MAP_FAILED);
-    m->buf = (char*)(m->adjPtr) + delta;
-}
-
-void otf_unmap(struct mapping *m) {
-    ERRIF(munmap(m->adjPtr, m->adjLen));
-    zero(m);
-}
 
 #define mmap DO_NOT_USE
 #define munmap DO_NOT_USE
-
-/* END COPY CODE */
 
 int main(int argc, char **argv)
 {
@@ -77,13 +27,13 @@ int main(int argc, char **argv)
     ERRIF(fd1 < 0);
     fstat(fd1, &sb);
     s1 = (size_t)sb.st_size;
-    otf_map(&m1, fd1, 0, s1);
+    fmap_map(&m1, fd1, 0, s1);
         
     fd2 = open(argv[2], O_RDONLY);
     ERRIF(fd2 < 0);
     fstat(fd2, &sb);
     s2 = (size_t)sb.st_size;
-    otf_map(&m2, fd2, 0, s2);
+    fmap_map(&m2, fd2, 0, s2);
 
     for (size_t i = 0; i < s2; i++) {
         if ( m1.buf[i % s1] != m2.buf[i] )

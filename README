@@ -10,11 +10,11 @@ consuming disk space.
 
 Use case:
 
-    $ curl 'http://localhost:8080/foo/data3' | cmp - ./foo/data3
+    $ curl 'http://localhost:8080/mnt/data3' | cmp - ./mnt/data3
 
 You don't want to create these files on your SSD:
 
-    $ ls -l foo
+    $ ls -l mnt
     -r--r--r-- 1 sk users 4.1k Jan  1 21:09 data1
     -r--r--r-- 1 sk users 4.2M Jan  1 21:09 data2
     -r--r--r-- 1 sk users 4.3G Jan  1 21:09 data3
@@ -35,16 +35,16 @@ Using
 
 Create mountpoint directory, and add some files:
 
-    $ mkdir foo
-    $ date > foo/realfile
+    $ mkdir mnt
+    $ date > mnt/realfile
 
-Run `otffs` on top of `foo`, maybe do this in another terminal.
+Run `otffs` on top of `mnt`, maybe do this in another terminal.
 
-    $ ./otffs foo
+    $ ./otffs mnt
 
-Check out the files in `foo`, try to read the large ones...
+Check out the files in `mnt`, try to read the large ones...
 
-    $ ls -l foo
+    $ ls -l mnt
     total 0
     -r--r--r-- 1 sk users 4.1k Jan  1 21:21 data1
     -r--r--r-- 1 sk users 4.2M Jan  1 21:21 data2
@@ -54,12 +54,47 @@ Check out the files in `foo`, try to read the large ones...
     -r-------- 1 sk users   29 Jan  1 21:21 realfile
 
 
+Common error messages
+---------------------
+
+  * “fuse: device not found, try 'modprobe fuse' first”
+
+    Have you upgraded the kernel?  Reboot.
+
+  * “The source `foo` is too short (29B).  Request of 65536B for `bar`
+    needs IOVEC of size 2260, limit is 1024!”
+
+    Reading from fake file `bar` sent a read(2) request to the file
+    system, asking for 65536 bytes.  So we need to concatenate 2260
+    copies of source file `foo`.  Your system cannot do that
+    efficiently, and I have not implemented the less efficient method.
+    See readv(2) and look for `IOV_MAX`.  You can solve this problem
+    by providing a source `foo` for which
+
+                             max amount of data req'd by read
+        filesize of foo  >  ----------------------------------
+                                        IOV_MAX
+
+    holds.
+
+  * “cannot access 'mnt': Transport endpoint is not connected”
+
+    The `otffs` process crashed, abd the OS still thinks the
+    mountpoint is mounted.  Umount the mountpoint, using
+
+        $ fusermount -u mnt
+
+
 TODO
 ====
 
-Date is not pseudorandom, but plain enumeration of 4-byte integers.
+Fails if less than 2 entries in config.
 
-Right now, the number, names, sizes, modes,and contents of the fake
+AVL tree.
+
+Data is not pseudorandom, but plain enumeration of 4-byte integers.
+
+Right now, the number, names, sizes, modes, and contents of the fake
 files are fixed.  Make this configurable.
 
 
@@ -70,16 +105,16 @@ Learning from others
     $ cd libfuse/example/
     $ gcc -Wall hello.c $(pkg-config fuse3 --cflags --libs) -o hello
 
-Make mountpoint `foo`.  Run in foreground (`-f`), and set user and
-group from the `foo` directory.  Maybe do this in a separate terminal:
+Make mountpoint `mnt`.  Run in foreground (`-f`), and set user and
+group from the `mnt` directory.  Maybe do this in a separate terminal:
 
-    $ mkdir foo
-    $ ./hello -f $(stat -c '-o uid=%u -o gid=%g' foo) foo
+    $ mkdir mnt
+    $ ./hello -f $(stat -c '-o uid=%u -o gid=%g' mnt) mnt
 
 Umounting is by terminating the program (through an exit handler it
 has installed), or through
 
-    $ fusermount -u foo
+    $ fusermount -u mnt
 
 
 

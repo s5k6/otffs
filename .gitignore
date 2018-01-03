@@ -1,7 +1,8 @@
 libfuse
 *.o
 fakefs
-foo
 otffs
 cmprep
 TAGS
+parsetest
+*.gch
