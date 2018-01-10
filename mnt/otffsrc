@@ -1,5 +1,6 @@
 shorter:   pass "template", size 10k, mode 640
 longer:    pass "template", size 100M
+large:     pass "template", size 1300M
 excessive: pass template, size 12E
 README:    pass "../README", mtime 1515038333
 template:  pass

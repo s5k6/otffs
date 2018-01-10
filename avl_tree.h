@@ -17,7 +17,7 @@ typedef struct avl_tree *avl_Tree;
 /* These types are here only to document the intention in the function
    signatures. */
 
-typedef void *avl_Key;
+typedef const void *avl_Key;
 typedef size_t avl_Val;
 typedef void *avl_State;
 

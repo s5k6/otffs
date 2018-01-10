@@ -20,17 +20,20 @@ int listFun(char *name, size_t ino, struct file **files) {
 
 int main(void) {
 
-    struct parseBuf buf;
-    
-    int fd = open("mnt/otffsrc", O_RDONLY);
-    ERRIF(!fd);
-    parse(&buf, fd);
-    close(fd);
+    struct parseResult pr;
+    pr.names = avl_new((avl_CmpFun)strcmp);
+    ALLOCATE(pr.files, 8);
+    {
+        int fd = open("mnt/otffsrc", O_RDONLY);
+        ERRIF(!fd);
+        parse(&pr, fd);
+        close(fd);
+    }
 
-    printf("\nParsed %zu entries in config file.\n", buf.files_used);
+    printf("\nParsed %zu entries in config file.\n", pr.files.used);
 
-    avl_traverse(buf.index, (avl_VisitorFun)listFun, buf.files);
-    free(buf.files);
+    avl_traverse(pr.names, (avl_VisitorFun)listFun, pr.files.array);
+    free(pr.files.array);
 
     return 0;
 }

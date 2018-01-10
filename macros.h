@@ -15,30 +15,36 @@
 
 #define zero(ptr) memset(ptr, 0, sizeof(*ptr))
 
-#define ARRAY(ty, foo)                          \
-    size_t foo##_used, foo##_alloc; ty *foo
 
-#define ALLOCATE(foo, s) do {                           \
-        foo##_alloc = s;                                \
-        foo##_used = 0;                                 \
-        foo = malloc(foo##_alloc * sizeof(*foo));       \
-        ERRIF(!foo);                                    \
+
+#define STACK(ty) struct { size_t alloc, used; ty *array; }
+
+#define ALLOCATE(foo, s) do {                                   \
+        foo.alloc = s;                                          \
+        foo.used = 0;                                           \
+        foo.array = malloc(foo.alloc * sizeof(*foo.array));     \
+        ERRIF(!foo.array);                                      \
     } while (0)
 
 #define ENOUGH(foo) do {                                                \
-        if (foo##_used == foo##_alloc) {                                \
-            foo = realloc(foo, (foo##_alloc *= 2) * sizeof(*foo));      \
-            ERRIF(!foo);                                                \
+        if (foo.used >= foo.alloc) {                                    \
+            foo.alloc *= 2;                                             \
+            foo.array = realloc(foo.array, foo.alloc * sizeof(*foo.array)); \
+            ERRIF(!foo.array);                                          \
         }                                                               \
     } while (0)
 
-#define TRIM(foo) do {                                  \
-        foo = realloc(foo, foo##_used * sizeof(*foo));  \
-        ERRIF(!foo);                                    \
+#define TRIM(foo) do {                                                  \
+        foo.alloc = foo.used;                                           \
+        foo.array = realloc(foo.array, foo.alloc * sizeof(*foo.array)); \
+        ERRIF(!foo.array);                                              \
     } while (0)
 
-#define ADD(foo, val) (foo[foo##_used++] = (val))
+#define PUSH(foo, val) (foo.array[foo.used++] = (val))
 
+#define POP(foo) (foo.array[--foo.used])
+
+#define AT(foo, idx) (foo.array[idx])
 
 
 #define NOT_IMPLEMENTED errx(1, "NOT IMPLEMENTED " __FILE__ ":%d", __LINE__)

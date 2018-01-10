@@ -2,6 +2,7 @@
 #define parser_RlBM2GiE1tuq
 
 #include "avl_tree.h"
+#include "macros.h"
 #include <sys/types.h>
 #include <stdlib.h>
 
@@ -16,13 +17,11 @@ struct file {
 
 struct file uninitFile;
 
-struct parseBuf {
-    avl_Tree index;
-    struct file **files;
-    size_t files_used;
-    size_t files_alloc;
+struct parseResult {
+    STACK(struct file *) files;
+    avl_Tree names;
 };
 
-int parse(struct parseBuf *buf, int fd);
+int parse(struct parseResult *parseResult, int fd);
 
 #endif

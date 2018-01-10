@@ -49,18 +49,18 @@ struct file uninitFile = {
 };
 
 
-size_t addFun(char *k, size_t v, size_t *o) {
+static size_t addFun(char *k, size_t v, size_t *o) {
     (void)v; (void)o;
     errx(1, "Redefining file: %s", k);
     return 0;
 }
 
-int parse(struct parseBuf *retBuf, int fd) {
+int parse(struct parseResult *pr, int fd) {
 
     ssize_t n;
     char read_buf[READ_BUF_SIZE];
 
-    ARRAY(char, buf);
+    STACK(char) buf;
     ALLOCATE(buf, 32);
 
     struct token {
@@ -69,7 +69,7 @@ int parse(struct parseBuf *retBuf, int fd) {
         size_t lin, col;
     };
 
-    ARRAY(struct token, tok);
+    STACK(struct token) tok;
     ALLOCATE(tok, 32);
 
     enum { sSpace, sPlain, sQuoted, sComment } state = sSpace;
@@ -101,10 +101,10 @@ int parse(struct parseBuf *retBuf, int fd) {
                 ENOUGH(tok);
                 switch (c) {
                 case ':':
-                    ADD(tok, ((struct token){ tColon, 0, lin, col }));
+                    PUSH(tok, ((struct token){ tColon, 0, lin, col }));
                     break;
                 case ',':
-                    ADD(tok, ((struct token){ tComma, 0, lin, col }));
+                    PUSH(tok, ((struct token){ tComma, 0, lin, col }));
                     break;
                 case '"':
                     state = sQuoted;
@@ -115,9 +115,9 @@ int parse(struct parseBuf *retBuf, int fd) {
                 case '\n':
                     lin++;
                     col = 0;
-                    ADD(tok, ((struct token){ tNewline, 0, lin, col }));
+                    PUSH(tok, ((struct token){ tNewline, 0, lin, col }));
                     break;
-                default: errx(1, "Unexpected `%c`", c);
+                default: errx(1, "Unexpected `%c` before %ld:%ld", c, lin, col);
                 }
                 break;
 
@@ -131,23 +131,25 @@ int parse(struct parseBuf *retBuf, int fd) {
 
             case sPlain:
                 if (isalnum(c)) {
-                    ADD(buf, c);
+                    PUSH(buf, c);
                     break;
                 }
                 i--;
                 col--;
-                ADD(buf, '\0');
+                PUSH(buf, '\0');
+                TRIM(buf);
                 ENOUGH(tok);
-                ADD(tok, ((struct token){ tPlain, buf, lin, col }));
+                PUSH(tok, ((struct token){ tPlain, buf.array, lin, col }));
                 ALLOCATE(buf, 32);
                 state = sSpace;
                 break;
 
             case sQuoted:
                 if (c == '"') {
-                    ADD(buf, '\0');
+                    PUSH(buf, '\0');
+                    TRIM(buf);
                     ENOUGH(tok);
-                    ADD(tok, ((struct token){ tQuoted, buf, lin, col }));
+                    PUSH(tok, ((struct token){ tQuoted, buf.array, lin, col }));
                     ALLOCATE(buf, 32);
                     state = sSpace;
                     break;
@@ -156,7 +158,7 @@ int parse(struct parseBuf *retBuf, int fd) {
                     lin++;
                     col=0;
                 }
-                ADD(buf, c);
+                PUSH(buf, c);
                 break;
 
             } // switch (state)
@@ -165,14 +167,9 @@ int parse(struct parseBuf *retBuf, int fd) {
         }
     }
 
-    free(buf);
+    free(buf.array);
     close(fd);
 
-
-    ARRAY(struct file *, files);
-    ALLOCATE(files, 16);
-
-    avl_Tree index = avl_new((avl_CmpFun)strcmp);
 
     enum {
         pName, pColon, pNext, pKey, pPass, pSize, pMode, pMtime, pFill
@@ -182,14 +179,14 @@ int parse(struct parseBuf *retBuf, int fd) {
     *current = uninitFile;
     char *name = NULL;
 
-    for (size_t t = 0; t < tok_used; t++) {
+    for (size_t t = 0; t < tok.used; t++) {
         switch (pState) {
 
         case pName:
-            switch (tok[t].ty) {
+            switch (AT(tok,t).ty) {
             case tPlain:
             case tQuoted:
-                name = tok[t].str;
+                name = AT(tok,t).str;
                 ERRIF(!name);
                 pState = pColon;
                 break;
@@ -197,85 +194,85 @@ int parse(struct parseBuf *retBuf, int fd) {
                 break;
             default:
                 errx(1, "Expected file name before %ld:%ld",
-                     tok[t].lin, tok[t].col);
+                     AT(tok,t).lin, AT(tok,t).col);
                 break;
             }
             break;
 
         case pColon:
-            if (tok[t].ty == tColon) {
+            if (AT(tok,t).ty == tColon) {
                 pState = pKey;
                 break;
             }
-            errx(1, "Expected `:` before %ld:%ld", tok[t].lin, tok[t].col);
+            errx(1, "Expected `:` before %ld:%ld", AT(tok,t).lin, AT(tok,t).col);
             break;
 
         case pNext:
-            switch (tok[t].ty) {
+            switch (AT(tok,t).ty) {
             case tComma:
                 pState = pKey;
                 break;
             case tNewline:
-                avl_insertWith((avl_AddFun)addFun, index, name,
-                               files_used, NULL);
-                ENOUGH(files);
-                ADD(files, current);
+                avl_insertWith((avl_AddFun)addFun, pr->names, name,
+                               pr->files.used, NULL);
+                ENOUGH(pr->files);
+                PUSH(pr->files, current);
                 current = new(struct file);
                 *current = uninitFile;
                 pState = pName;
                 break;
             default:
                 errx(1, "Expected `,` or newline before %ld:%ld",
-                     tok[t].lin, tok[t].col);
+                     AT(tok,t).lin, AT(tok,t).col);
             }
             break;
 
         case pKey:
-            if (tok[t].ty != tPlain) {
+            if (AT(tok,t).ty != tPlain) {
                 errx(1, "Expected keyword before %ld:%ld",
-                     tok[t].lin, tok[t].col);
+                     AT(tok,t).lin, AT(tok,t).col);
                 break;
             }
-            if (!strcmp("pass", tok[t].str)) {
+            if (!strcmp("pass", AT(tok,t).str)) {
                 pState = pPass;
                 break;
             }
-            if (!strcmp("fill", tok[t].str)) {
+            if (!strcmp("fill", AT(tok,t).str)) {
                 pState = pFill;
                 break;
             }
-            if (!strcmp("size", tok[t].str)) {
+            if (!strcmp("size", AT(tok,t).str)) {
                 pState = pSize;
                 break;
             }
-            if (!strcmp("mode", tok[t].str)) {
+            if (!strcmp("mode", AT(tok,t).str)) {
                 pState = pMode;
                 break;
             }
-            if (!strcmp("mtime", tok[t].str)) {
+            if (!strcmp("mtime", AT(tok,t).str)) {
                 pState = pMtime;
                 break;
             }
             errx(1, "Unexpected key `%s` before %ld:%ld when defining `%s`",
-                 tok[t].str, tok[t].lin, tok[t].col, name);
+                 AT(tok,t).str, AT(tok,t).lin, AT(tok,t).col, name);
             break;
 
         case pFill:
-            if (!strcmp("integers", tok[t].str)) {
+            if (!strcmp("integers", AT(tok,t).str)) {
                 current->srcName = NULL;
                 current->srcSize = 1;
                 pState = pNext;
                 break;
             }
             errx(1, "Unexpected fill mode `%s` before %ld:%ld",
-                 tok[t].str, tok[t].lin, tok[t].col);
+                 AT(tok,t).str, AT(tok,t).lin, AT(tok,t).col);
             break;
 
         case pPass:
-            switch (tok[t].ty) {
+            switch (AT(tok,t).ty) {
             case tPlain:
             case tQuoted:
-                current->srcName = tok[t].str;
+                current->srcName = AT(tok,t).str;
                 pState = pNext;
                 break;
             case tComma:
@@ -286,17 +283,17 @@ int parse(struct parseBuf *retBuf, int fd) {
                 break;
             default:
                 errx(1, "Expected source name before %ld:%ld",
-                     tok[t].lin, tok[t].col);
+                     AT(tok,t).lin, AT(tok,t).col);
                 break;
             }
             break;
 
         case pSize:
-            switch (tok[t].ty) {
+            switch (AT(tok,t).ty) {
             case tPlain:
                 {
                     char *e;
-                    current->size = strtol(tok[t].str, &e, 10);
+                    current->size = strtol(AT(tok,t).str, &e, 10);
                     if (*e) {
                         off_t f = 0;
                         for (size_t s = 0; s < sizeof(suf)/sizeof(*suf); s++) {
@@ -307,7 +304,7 @@ int parse(struct parseBuf *retBuf, int fd) {
                         }
                         if (!f)
                             errx(1, "Invalid suffix `%s` before %ld:%ld",
-                                 e, tok[t].lin, tok[t].col);
+                                 e, AT(tok,t).lin, AT(tok,t).col);
                         current->size *= f;
                     }
                     pState = pNext;
@@ -315,46 +312,46 @@ int parse(struct parseBuf *retBuf, int fd) {
                 break;
             default:
                 errx(1, "Expected file size before %ld:%ld",
-                     tok[t].lin, tok[t].col);
+                     AT(tok,t).lin, AT(tok,t).col);
                 break;
             }
             break;
 
         case pMtime:
-            switch (tok[t].ty) {
+            switch (AT(tok,t).ty) {
             case tPlain:
                 {
                     char *e;
-                    current->mtime = strtol(tok[t].str, &e, 10);
+                    current->mtime = strtol(AT(tok,t).str, &e, 10);
                     if (*e)
                         errx(1, "Invalid unix time `%s` before %ld:%ld",
-                             tok[t].str, tok[t].lin, tok[t].col);
+                             AT(tok,t).str, AT(tok,t).lin, AT(tok,t).col);
                     pState = pNext;
                 }
                 break;
             default:
                 errx(1, "Expected file time before %ld:%ld",
-                     tok[t].lin, tok[t].col);
+                     AT(tok,t).lin, AT(tok,t).col);
                 break;
             }
             break;
 
         case pMode:
-            switch (tok[t].ty) {
+            switch (AT(tok,t).ty) {
             case tPlain:
                 {
                     char *e;
-                    current->mode = (mode_t)strtol(tok[t].str, &e, 8);
+                    current->mode = (mode_t)strtol(AT(tok,t).str, &e, 8);
                     if (*e)
                         errx(1, "Invalid file mode `%s` before %ld:%ld",
-                             tok[t].str, tok[t].lin, tok[t].col);
+                             AT(tok,t).str, AT(tok,t).lin, AT(tok,t).col);
                     current->mode = S_IFREG | (current->mode & 0777);
                     pState = pNext;
                 }
                 break;
             default:
                 errx(1, "Expected file mode before %ld:%ld",
-                     tok[t].lin, tok[t].col);
+                     AT(tok,t).lin, AT(tok,t).col);
                 break;
             }
             break;
@@ -362,12 +359,7 @@ int parse(struct parseBuf *retBuf, int fd) {
         }
     }
 
-    free(tok);
-
-    retBuf->files = files;
-    retBuf->files_used = files_used;
-    retBuf->files_alloc = files_alloc;
-    retBuf->index = index;
+    free(tok.array);
 
     return 0;
 }
