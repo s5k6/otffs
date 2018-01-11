@@ -1,6 +1,6 @@
 
 `otfFS` — File system of on-the-fly test data
-==============================================
+=============================================
 
 Goal
 ----
@@ -23,39 +23,86 @@ You don't want to create these files on your SSD:
 
 Plan: Use FUSE [1] to provide a file system, which is backed by an
 executable instead of disk space.  Reading from a file in this
-on-the-fly FS delivers data from a pseudo random number generator.
-Thus, every read a the same offset of the same file will produce the
-same data.
+on-the-fly FS delivers test data, which may be generated
+algorithmically, or be provided by a concatenation of sufficiently
+many copies of a given source file.  Thus, every read at the same
+offset of the same file will produce the same data.
 
 
-Using
------
+Using it
+--------
 
     $ make
 
-Create mountpoint directory, and add some files:
+Create mountpoint directory, and create a config file maned `otffsrc`
+below that.  Maybe add further source files.  An example directory
+`mnt/otffsrc` is provided.  To use it, do:
 
-    $ mkdir mnt
-    $ date > mnt/realfile
+    $ ls -l -h mnt/
+    total 8.0K
+    -rw------- 1 sk users 1.2K Jan 11 16:33 otffsrc
+    -rw------- 1 sk users  455 Jan 11 18:38 template
 
-Run `otffs` on top of `mnt`, maybe do this in another terminal.
+    $ ./otffs ./mnt
 
-    $ ./otffs mnt
+Open a second terminal, and
 
-Check out the files in `mnt`, try to read the large ones...
+    $ ls -l -h mnt/
+    total 8.1E
+    -rw------- 1 sk users 8.0E Jan 11 18:38 excessive
+    -rw------- 1 sk users 2.3K Jan 11 18:38 five
+    -rw------- 1 sk users  16G Jan 15 22:03 integers
+    -rw------- 1 sk users 1.3G Jan 11 18:38 large
+    -rw-r----- 1 sk users  128 Jan 11 18:38 shorter
+    -rw------- 1 sk users  455 Jan  1  1970 template
 
-    $ ls -l mnt
-    total 0
-    -r--r--r-- 1 sk users 4.1k Jan  1 21:21 data1
-    -r--r--r-- 1 sk users 4.2M Jan  1 21:21 data2
-    -r--r--r-- 1 sk users 4.3G Jan  1 21:21 data3
-    -r--r--r-- 1 sk users 4.4T Jan  1 21:21 data4
-    -r--r--r-- 1 sk users 4.6P Jan  1 21:21 data5
-    -r-------- 1 sk users   29 Jan  1 21:21 realfile
+To umount, do
+
+    $ fusermount -u mnt/
+
+    $ ls -l -h mnt/
+    total 8.0K
+    -rw------- 1 sk users 1.2K Jan 11 16:33 otffsrc
+    -rw------- 1 sk users  455 Jan 11 18:38 template
+
+
+The general format of `otffsrc` is a sequence of <line>s, matching
+
+    <line> ::= <filename> `:` <how to produce it> (, <option>*)
+   
+    <filename> ::= <ascii characters>
+   
+    <how to produce it> ::= `pass` <source path>
+                         |  `fill` <algorithm>
+   
+    <algorithm> ::= `integers`
+   
+    <option> ::= `mtime` {decimal integer, seconds since epoch}
+              |  `mode` {three octal digits}
+              |  `size` {decimal integer}<suffix>?
+   
+    <suffix> ::= `k` | `M` | `G` | `T` | `P` | `E`
+               | `ki` | `Mi` | `Gi` | `Ti` | `Pi` | `Ei`
+               | `x`
 
 
 Common error messages
 ---------------------
+
+Compilation:
+
+  * “Package fuse3 was not found in the pkg-config search path.
+    Perhaps you should add the directory containing `fuse3.pc' to the
+    PKG_CONFIG_PATH environment variable”
+
+    or
+
+    “fuse_lowlevel.h: No such file or directory”
+
+    You need to have the header files for fuse3 installed.  And of
+    course your kernel must support FUSE.
+
+Runtime:
 
   * “fuse: device not found, try 'modprobe fuse' first”
 
@@ -83,19 +130,6 @@ Common error messages
     mountpoint is mounted.  Umount the mountpoint, using
 
         $ fusermount -u mnt
-
-
-TODO
-====
-
-Fails if less than 2 entries in config.
-
-AVL tree.
-
-Data is not pseudorandom, but plain enumeration of 4-byte integers.
-
-Right now, the number, names, sizes, modes, and contents of the fake
-files are fixed.  Make this configurable.
 
 
 Learning from others

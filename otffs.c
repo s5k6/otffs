@@ -15,16 +15,17 @@
 #include <sys/mman.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <time.h>
+#include <assert.h>
 
 #define mmap DO_NOT_USE
 #define munmap DO_NOT_USE
 
 #define MAX_NAME_LENGTH 128
 #define DEFAULT_TIMEOUT 1.0
-#define VERBOSE 0
 
 
-void *_new(size_t size) {
+static void *_new(size_t size) {
     void *tmp = malloc(size);
     if (! tmp)
         err(1, "allcating %zu bytes", size);
@@ -35,26 +36,38 @@ void *_new(size_t size) {
 
 struct parseResult pr;
 
-struct timeval now; // time of starting `otffs`
+struct timespec now; // time of starting `otffs`
 
-int rootFd = -1; // pre-mount descriptor of mount point
+static int rootFh = -1; // handle of pre-mount mount point
+static int logFh = -1; // handle of log file, if open
 
+
+#define log(fmt, ...) do {                                       \
+        if (logFh >= 0) dprintf(logFh, fmt, __VA_ARGS__);        \
+    } while (0)
 
 
 static int otf_stat(struct stat *buf, fuse_ino_t ino) {
 
-    ERRIF(! AT(pr.files,ino));
+    struct file *fp = AT(pr.files, ino);
+    
+    if (! fp)
+        return -EBADF;
+        
+    ERRIF(fp->size > LONG_MAX); // FIXME: max of off_t?
 
     zero(buf);
     *buf = (struct stat){
         .st_ino = ino,
-        .st_mode = AT(pr.files,ino)->mode,
-        .st_nlink = AT(pr.files,ino)->nlink,
-        .st_size = AT(pr.files,ino)->size,
-        .st_atime = AT(pr.files,ino)->atime,
-        .st_mtime = AT(pr.files,ino)->mtime,
+        .st_mode = fp->mode,
+        .st_nlink = fp->nlink,
+        .st_size = (off_t)fp->size,
+        .st_atime = fp->atime,
+        .st_mtime = fp->mtime,
         .st_uid = getuid(),
         .st_gid = getgid(),
+        .st_blksize = 1 << 10,
+        .st_blocks = (blkcnt_t)(fp->size - 1) / 512 + 1, // unchecked
     };
 
     return 0;
@@ -65,43 +78,26 @@ static void otf_getattr(fuse_req_t req, fuse_ino_t ino,
                     struct fuse_file_info *fi) {
     (void) fi;
 
-    if (VERBOSE)
-        warnx("getattr(ino=%ld)", ino);
-
     struct stat buf;
-    if (otf_stat(&buf, ino))
+    if (otf_stat(&buf, ino)) {
+        log("getattr(%ld) = ENOENT", ino);
         ERRIF(fuse_reply_err(req, ENOENT));
-    else
+    } else {
+        log("getattr(%ld) = { .st_size=%zu, ...}", ino, buf.st_size);
         ERRIF(fuse_reply_attr(req, &buf, DEFAULT_TIMEOUT));
+    }
 }
 
 
 
-// FIXME review this code
-static int otf_replyBufLimited(fuse_req_t req, const char *buf, size_t bufsize,
-			     off_t off, size_t maxsize) {
-
-    if (off < (ssize_t)bufsize)
-        return fuse_reply_buf(
-            req,
-            buf + off,
-            (size_t)min((ssize_t)bufsize - off, (ssize_t)maxsize)
-        );
-    else
-        return fuse_reply_buf(req, NULL, 0);
-}
-
-
-
-struct sdafjsfb {
+struct addFun_ctx {
     char *p;
     size_t s;
     fuse_req_t r;
 };
 
 // FIXME: better implement a “cursor” in the avl tree
-static int addFun(char *name, ino_t ino, struct sdafjsfb *ptr) {
-    (void)name; (void)ino; (void)ptr;
+static int otf_addFun(char *name, ino_t ino, struct addFun_ctx *ptr) {
     ERRIF(! AT(pr.files, ino));
 
     size_t oldsize = ptr->s;
@@ -118,54 +114,55 @@ static int addFun(char *name, ino_t ino, struct sdafjsfb *ptr) {
 }
 
 static void otf_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
-                        off_t off, struct fuse_file_info *fi)
-{
-    (void) fi;
-    
-    if (VERBOSE)
-        warnx("readdir(ino=%ld)", ino);
-    
-    if (ino != FUSE_ROOT_ID)
+                        off_t off, struct fuse_file_info *fi) {
+    (void)fi;
+
+    if (ino != FUSE_ROOT_ID) {
+        log("readdir(%ld) = ENOTDIR", ino);
         ERRIF(fuse_reply_err(req, ENOTDIR));
-    else {
-        struct sdafjsfb buf = {
-            .p = NULL,
-            .s = 0,
-            .r = req,
-        };
-
-        ERRIF(avl_traverse(pr.names, (avl_VisitorFun)addFun, &buf));
-
-        otf_replyBufLimited(req, buf.p, buf.s, off, size);
-        free(buf.p);
+        return;
     }
+    
+    if ((size_t)off >= size) {
+        log("readdir(%ld) returns 0 bytes", ino);
+        ERRIF(fuse_reply_buf(req, NULL, 0));
+        return;
+    }
+    
+    struct addFun_ctx buf = {
+        .p = NULL,
+        .s = 0,
+        .r = req,
+    };
+
+    ERRIF(avl_traverse(pr.names, (avl_VisitorFun)otf_addFun, &buf));
+
+    size_t ret = min(buf.s - (size_t)off, size);
+    log("readdir(%ld) returns %zu bytes", ino, ret);
+    ERRIF(fuse_reply_buf(req, buf.p + off, ret));
+
+    free(buf.p);
 }
 
 
 
 static void otf_lookup(fuse_req_t req, fuse_ino_t parent,
-                            const char *name) {
+                       const char *name) {
 
-    if (! AT(pr.files,parent)) {
-        ERRIF(fuse_reply_err(req, ENOENT));
-        return;
-    }
+    struct file *pp = AT(pr.files, parent);
 
-    if (! S_ISDIR(AT(pr.files,parent)->mode)) {
+    if (! (pp && S_ISDIR(pp->mode))) {
+        log("lookup(%ld, %s) = ENOTDIR", parent, name);
         ERRIF(fuse_reply_err(req, ENOTDIR));
         return;
     }
-
-    /* FIXME check permissions?  Should be done by kernel, see `-o
-       default_permissions` */
 
     /* FIXME get list of files for this specific directory.  Currently
        there's only one dir, containing all the files. */
 
     ino_t ino;
     if (avl_lookup(pr.names, name, &ino)) {
-        warnx("lookup(%s) = %ld", name, ino);
-        ERRIF(! AT(pr.files, ino));
+        assert(AT(pr.files, ino));
 
         struct fuse_entry_param e;
         e = (struct fuse_entry_param){
@@ -174,11 +171,12 @@ static void otf_lookup(fuse_req_t req, fuse_ino_t parent,
             .entry_timeout = DEFAULT_TIMEOUT,
         };
         otf_stat(&e.attr, e.ino);
+        log("lookup(%s) = { .ino = %ld, ... }", name, ino);
         ERRIF(fuse_reply_entry(req, &e));
-
         return;
     }
 
+    log("lookup(%s) = ENOENT", name);
     ERRIF(fuse_reply_err(req, ENOENT));
 }
 
@@ -187,193 +185,209 @@ static void otf_lookup(fuse_req_t req, fuse_ino_t parent,
 static void otf_open(fuse_req_t req, fuse_ino_t ino,
                        struct fuse_file_info *fi) {
 
-    if (! AT(pr.files,ino)) {
-        ERRIF(fuse_reply_err(req, ENOENT));
+    struct file *fp = AT(pr.files, ino);
+    if (! fp) {
+        log("open(%ld) = EBADF", ino);
+        ERRIF(fuse_reply_err(req, EBADF));
         return;
     }
 
-    warnx("open(%ld)", ino);
-
-    if (! S_ISREG(AT(pr.files,ino)->mode)) {
+    if (! S_ISREG(fp->mode)) {
+        log("open(%ld) = EISDIR (not regular file)", ino);
         ERRIF(fuse_reply_err(req, EISDIR)); // FIXME not entirely correct
         return;
     }
 
-    int fd;
-    if (AT(pr.files,ino)->srcName) {
-        fd = openat(rootFd, AT(pr.files,ino)->srcName, O_RDONLY);
-        ERRIF(fd == -1);
-    } else {
-        fd = 0;
+    int fh;
+    if (fp->srcName) {
+        fh = openat(rootFh, fp->srcName, O_RDONLY);
+        ERRIF(fh == -1);
+    } else { // computed content
+        fh = 0; // FIXME is this ok?
     }
 
-    fi->fh = (unsigned long)fd;
+    fi->fh = (unsigned long)fh;
+    log("open(%ld) = { .fh = %ld, ... } ", ino, fi->fh);
     ERRIF(fuse_reply_open(req, fi));
 }
 
 
 
-void otf_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+static void otf_release(fuse_req_t req, fuse_ino_t ino,
+                        struct fuse_file_info *fi) {
 
     (void)req;
 
-    ERRIF(! AT(pr.files,ino));
+    struct file *fp = AT(pr.files, ino);
 
-    warnx("release(%ld)", ino);
-
-    if (AT(pr.files,ino)->srcName)
+    if (! fp) {
+        log("release(%ld) = EBADF", ino);
+        ERRIF(fuse_reply_err(req, EBADF));
+        return;
+    }
+        
+    if (fp->srcName)
         close((int)(fi->fh));
-
+    log("release(%ld) = 0", ino);
+    ERRIF(fuse_reply_err(req, 0));
 }
 
 
+
+static int otf_delFun(char *key, ino_t ino, ino_t *old) {
+    *old = ino;
+    free(key);
+    return 0;
+}
 
 static void otf_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
 
     (void)parent;
 
     ino_t ino;
-    if (avl_lookup(pr.names, name, &ino)) {
-        ERRIF(! AT(pr.files, ino));
-
-        NOT_IMPLEMENTED;
+    if (avl_deleteWith((avl_VisitorFun)otf_delFun, pr.names, name, &ino)) {
+        struct file *fp = AT(pr.files, ino);
+        assert(fp);
+        free(fp);
+        AT(pr.files, ino) = NULL;
+        log("unlink(%s) = 0", name);
+        ERRIF(fuse_reply_err(req, 0));
+        return;
     }
 
+    log("unlink(%s) = ENOENT", name);
     ERRIF(fuse_reply_err(req, ENOENT));
 }
 
 
 
+static void otf_readFromFile(fuse_req_t req, int handle, struct file *fp,
+                         size_t off, size_t amount) {
 
+    /* Produce a file that is a repetition of the source file. */
+    const size_t
+        b = (size_t)fp->srcSize, // "block": all file content
+        k = off / b, // "block" to start reading in
+        l = (off + amount) / b, // "block" to end reading in
+        s = off % b, // where in "block" k to start reading
+        e = (s + amount) % b, // where in "block" l to end reading
+        c = l-k+1;  // total number of "block"s req'd
 
-static void otf_fill_counting(char *buf, off_t off, size_t amount) {
+    if (c > IOV_MAX)
+        errx(1, "The source `%s` is too short (%zuB).  Request of %zuB"
+             " needs IOVEC of size %zu, system limit is %d!",
+             fp->srcName, b, amount, c, IOV_MAX);
 
-    size_t chunk = sizeof(unsigned int);
-    size_t steps = amount / chunk;
-    size_t rem = amount % chunk;
+    if (k == l) { // start and end in same block
+        
+        assert(s < e);
+        assert(e < b);
+        assert(amount == e - s);
 
-    if (VERBOSE)
-        warnx("fill_counting(off=%ld, amount=%ld)", off, amount);
+        struct mapping m;
+        fmap_map(&m, handle, (size_t)s, (size_t)(e-s));
+        ERRIF(fuse_reply_buf(req, m.buf, (size_t)amount));
+        fmap_unmap(&m);
 
-    unsigned int value = (unsigned int)off / (unsigned int)chunk;
+    } else { // start and end in different blocks
 
-    for (size_t i = 0; i < steps; i++) {
-        memcpy(&buf[i * chunk], &value, chunk);
-        value++;
-    }
-    if (rem) {
-        memcpy(&buf[amount - rem], &value, rem);
-    }
-}
-
-
-
-static void otf_read(fuse_req_t req, fuse_ino_t ino, size_t len, off_t off,
-                      struct fuse_file_info *fi) {
-
-    if (VERBOSE)
-        warnx("read(ino=%ld, len=%zu, off=%zu)", ino, len, off);
-
-    if (! AT(pr.files,ino)) {
-        ERRIF(fuse_reply_err(req, ENOENT));
-        return;
-    }
-
-    if (off > AT(pr.files,ino)->size) {
-        ERRIF(fuse_reply_buf(req, NULL, 0));
-        return;
-    }
-
-    size_t amount = min(len, (size_t)(AT(pr.files,ino)->size - off));
-
-    if (amount <=0) {
-        ERRIF(fuse_reply_buf(req, NULL, 0));
-        return;
-    }
-
-    if (AT(pr.files,ino)->srcName) {
-
-        /* Produce a file that is a repetition of the source file. */
-        const size_t
-            b = (size_t)AT(pr.files,ino)->srcSize,
-            k = (size_t)off / b,
-            l = ((size_t)off + amount) / b,
-            s = (size_t)off % b,
-            e = (s + amount) % b,
-            c = l-k+1;
-
-#if 0 //U4aByyvCWHMy
-        warnx("Chunk range=%zu..%zu b=%zu (k=%zu l=%zu c=%zu) s=%zu e=%zu",
-              off, (size_t)off+amount, b, k, l, c, s, e);
-#endif //U4aByyvCWHMy
-
-        if (c > IOV_MAX)
-            errx(1, "The source `%s` is too short (%zuB).  Request of %zuB"
-                 " for inode %ld needs IOVEC of size %zu, limit is %d!",
-                 AT(pr.files,ino)->srcName, b, amount, ino, c, IOV_MAX);
-
-        if (k == l) {
-            ERRIF(s >= e);
-            ERRIF(amount != e - s);
-            ERRIF(e >= b);
-            struct mapping m;
-            fmap_map(&m, (int)(fi->fh), s, e-s);
-            ERRIF(fuse_reply_buf(req, m.buf, amount));
-            fmap_unmap(&m);
-            return;                
-        } else {
-            struct mapping m;
-            fmap_map(&m, (int)(fi->fh), 0, b);
-
-            struct iovec *vector = calloc(c, sizeof(struct iovec));
-            ERRIF(! vector);
-
-            vector[0] = (struct iovec){
-                .iov_base = m.buf + s,
-                .iov_len = b - s
-            };
-            for (size_t i = 1; i < c-1; i++)
-                vector[i] = (struct iovec){
-                    .iov_base = m.buf,
-                    .iov_len = b
-                };
-            vector[c-1] = (struct iovec){
+        struct mapping m;
+        fmap_map(&m, handle, 0, (size_t)b);
+        
+        struct iovec *vector = calloc((size_t)c, sizeof(struct iovec));
+        ERRIF(! vector);
+        
+        vector[0] = (struct iovec){
+            .iov_base = m.buf + s,
+            .iov_len = (size_t)(b - s)
+        };
+        for (size_t i = 1; i < (size_t)(c-1); i++)
+            vector[i] = (struct iovec){
                 .iov_base = m.buf,
-                .iov_len = e
+                .iov_len = (size_t)b
             };
-            
-#if 0 //qSciMGi8LFdS
-            for (size_t i = 0; i < c; i++) {
-                warnx("  %zu: %zu..%zu",
-                       i,
-                       (char*)(vector[i].iov_base) - buf,
-                       (char*)(vector[i].iov_base) + vector[i].iov_len - buf);
-            }
+        vector[c-1] = (struct iovec){
+            .iov_base = m.buf,
+            .iov_len = (size_t)e
+        };
+        
+        ERRIF(fuse_reply_iov(req, vector, (int)(c)));
+        
+        fmap_unmap(&m);
+        free(vector);
 
-            {
-                int fd = open("fixme", O_WRONLY|O_CREAT, S_IRUSR|S_IWUSR);
-                ERRIF(fd < 0);
-                ERRIF(writev(fd, vector, (int)c) != (int)amount);
-                close(fd);
-            }
-#endif //qSciMGi8LFdS
-            
-            ERRIF(fuse_reply_iov(req, vector, (int)(c)));
-
-            fmap_unmap(&m);
-            free(vector);
-            return;
-        }
-    } else {
-        /* Fill with integers.  FIXME incorrect if offset is not a
-           4-byte boundary. */
-        char *buf = malloc(amount);
-        ERRIF(! buf);
-        otf_fill_counting(buf, off, amount);
-        ERRIF(fuse_reply_buf(req, buf, amount));
-        free(buf);
     }
 }
+
+static void otf_readFromIntegers(fuse_req_t req, size_t off, size_t amount) {
+    size_t
+        s = sizeof(unsigned int), // size of one item
+        d = off % s, // delta between offset and item boundary
+        c = (amount + s - 1) / s, // number of items needed in memory
+        z = (size_t)off / s; // first item to put in memory
+
+    unsigned int *buf = malloc(c * s);
+    ERRIF(! buf);
+
+    for (size_t i = 0; i < c; i++)
+        buf[i] = (unsigned int)(z + i);
+
+    ERRIF(fuse_reply_buf(req, (char *)buf + d, amount));
+
+    free(buf);
+}
+
+static void otf_readFromChars(fuse_req_t req, size_t off, size_t amount) {
+    size_t
+        s = sizeof(unsigned char), // size of one item
+        d = off % s, // delta between offset and item boundary
+        c = (amount + s - 1) / s, // number of items needed in memory
+        z = (size_t)off / s; // first item to put in memory
+
+    unsigned char *buf = malloc(c * s);
+    ERRIF(! buf);
+
+    for (size_t i = 0; i < c; i++)
+        buf[i] = (unsigned char)(z + i);
+
+    ERRIF(fuse_reply_buf(req, (char *)buf + d, amount));
+
+    free(buf);
+}
+
+static void otf_read(fuse_req_t req, fuse_ino_t ino, size_t len, off_t _off,
+                     struct fuse_file_info *fi) {
+
+    ERRIF(_off < 0);
+    size_t off = (size_t)_off;
+    
+    struct file *fp = AT(pr.files, ino);
+
+    if (! fp) {
+        log("read(%ld, %zu, %zu) = EBADF", ino, off, len);
+        ERRIF(fuse_reply_err(req, EBADF));
+        return;
+    }
+
+    if (len == 0 || off >= (size_t)fp->size) {
+        log("read(%ld, %zu, %zu) returns 0 bytes", ino, off, len);
+        ERRIF(fuse_reply_buf(req, NULL, 0));
+        return;
+    }
+
+    size_t amount = min(len, (size_t)fp->size - off);
+
+    log("read(%ld, %zu, %zu) returns %zu bytes", ino, off, len, amount);
+    if (fp->srcName)
+        otf_readFromFile(req, (int)(fi->fh), fp, off, amount);
+    else if (fp->srcSize == 1)
+        otf_readFromIntegers(req, off, amount);
+    else if (fp->srcSize == 2)
+        otf_readFromChars(req, off, amount);
+    else
+        assert(0);
+}
+
 
 
 static struct fuse_lowlevel_ops ops = {
@@ -388,53 +402,99 @@ static struct fuse_lowlevel_ops ops = {
 
 
 
-int gatherFun(char *name, ino_t ino, void *foo) {
+static int otf_gatherFun(char *name, ino_t ino, void *foo) {
     (void)foo; (void)name;
-    
-    ERRIF(! AT(pr.files, ino));
-    
-    if (AT(pr.files, ino)->nlink == uninitFile.nlink)
-        AT(pr.files, ino)->nlink = 1;
+    struct file *fp =AT(pr.files, ino);
 
-    if (AT(pr.files, ino)->srcName) {
+    ERRIF(! fp);
+
+    if (fp->srcName) {
         struct stat buf;
-        if (fstatat(rootFd, AT(pr.files, ino)->srcName, &buf,
+        if (fstatat(rootFh, fp->srcName, &buf,
                     AT_SYMLINK_NOFOLLOW))
-            err(1, "Cannot stat `%s`", AT(pr.files, ino)->srcName);
-                
-        if (AT(pr.files, ino)->size == uninitFile.size)
-            AT(pr.files, ino)->size = buf.st_size;
+            err(1, "Cannot stat `%s`", fp->srcName);
 
-        if (AT(pr.files, ino)->srcSize == uninitFile.srcSize)
-            AT(pr.files, ino)->srcSize = buf.st_size;
-                        
-        if (AT(pr.files, ino)->mode == uninitFile.mode)
-            AT(pr.files, ino)->mode = buf.st_mode;
-                        
-        if (AT(pr.files, ino)->mtime == uninitFile.mtime)
-            AT(pr.files, ino)->mtime = buf.st_mtime;
-                        
-        if (AT(pr.files, ino)->atime == uninitFile.atime)
-            AT(pr.files, ino)->atime = buf.st_atime;
-                        
+        if ((buf.st_mode & S_IFMT) != S_IFREG)
+            errx(1, "Refusing to use non-regular file `%s` as source for `%s`.",
+                fp->srcName, name);
+
+        if (fp->srcSize == uninitFile.srcSize) {
+            ERRIF(buf.st_size < 0);
+            fp->srcSize = (ssize_t)buf.st_size;
+        }
+
+        if (fp->size < 0)
+            fp->size = -(fp->size * fp->srcSize);
+
+        if (fp->mode == uninitFile.mode)
+            fp->mode = buf.st_mode;
+
+        if (fp->mtime == uninitFile.mtime)
+            fp->mtime = buf.st_mtime;
+
+        if (fp->atime == uninitFile.atime)
+            fp->atime = buf.st_atime;
+
     } else {
-        if (AT(pr.files, ino)->mode == uninitFile.mode)
-            AT(pr.files, ino)->mode = S_IFREG | 0600;
+        if (fp->size < 0) {
+            switch (fp->srcSize) {
+            case 1:
+                fp->size = (ssize_t)((size_t)(-fp->size) *
+                                     sizeof(unsigned int) * (UINT_MAX + 1L));
+                break;
+            case 2:
+                fp->size = (ssize_t)((size_t)(-fp->size) *
+                                     sizeof(unsigned char) * (UCHAR_MAX + 1L));
+                break;
+            default:
+                assert(0);
+                break;
+            }
+        }
+
+        if (fp->mode == uninitFile.mode)
+            fp->mode = S_IFREG | 0600;
+
+        if (fp->mtime == uninitFile.mtime)
+            fp->mtime = now.tv_sec;
+
+        if (fp->atime == uninitFile.atime)
+            fp->atime = now.tv_sec;
     }
 
-#if 0 //U2tVABRqZ6gd
-    printf("%05o %12s @%ld %30luB %12s %8ld%c mtime=%ld\n",
-           AT(pr.files, ino)->mode & 077777,
-           name,
-           ino,
-           AT(pr.files, ino)->size,
-           AT(pr.files, ino)->srcName ? AT(pr.files, ino)->srcName : "(otffs)",
-           AT(pr.files, ino)->srcSize,
-           AT(pr.files, ino)->srcName ? 'B' : '#',
-           AT(pr.files, ino)->mtime
-           );
-#endif //U2tVABRqZ6gd
-    
+    if (fp->nlink == uninitFile.nlink)
+        fp->nlink = 1;
+
+    char const *gen[] = { "root", "integers", "chars" };
+
+    struct tm tmBuf;
+    ERRIF(! localtime_r(&fp->mtime, &tmBuf));
+
+    const char *fmt[] = {
+        "%b %d %H:%M",
+        " %Y %b %d"
+    };
+    char dateBuf[128];
+    ERRIF(! strftime(dateBuf, 128, fmt[
+        now.tv_sec - fp->mtime > 365 * 24 * 60 * 60
+    ], &tmBuf));
+
+    if (fp->srcName)
+        log("%05o %s %s %luB (file:%s %ldB)",
+              fp->mode & 077777,
+              dateBuf,
+              name,
+              fp->size,
+              fp->srcName,
+              fp->srcSize);
+    else
+        log("%05o %s %s %luB (otffs:%s)",
+              fp->mode & 077777,
+              dateBuf,
+              name,
+              fp->size,
+              gen[fp->srcSize]);
+
     return 0;
 }
 
@@ -463,13 +523,18 @@ int main(int argc, char *argv[]) {
 
     /* BEGIN MY CODE */
 
-   
-    ERRIF(gettimeofday(&now, NULL));
-    rootFd = open(opts.mountpoint, O_RDONLY|O_DIRECTORY);
+#if 0
+    logFh = open("otffs.log", O_WRONLY | O_CREAT | O_APPEND, 0666);
+    ERRIF(logFh < 0);
+#endif
+    
+    ERRIF(clock_gettime(CLOCK_REALTIME, &now));
+
+    rootFh = open(opts.mountpoint, O_RDONLY|O_DIRECTORY);
 
     pr.names = avl_new((avl_CmpFun)strcmp);
-    ALLOCATE(pr.files, min(FUSE_ROOT_ID + 1, 8));    
-    
+    ALLOCATE(pr.files, min(FUSE_ROOT_ID + 1, 8));
+
     { // add root directory
         char *name = strdup(".");
         ERRIF(!name);
@@ -483,21 +548,21 @@ int main(int argc, char *argv[]) {
             .atime = now.tv_sec,
             .mtime = now.tv_sec,
         };
-        
+
         pr.files.array[FUSE_ROOT_ID] = buf;
         pr.files.used = FUSE_ROOT_ID + 1;
     }
 
-    
+
     {
-        int fd = openat(rootFd, "otffsrc", O_RDONLY);
-        ERRIF(fd < 0);
-        parse(&pr, fd);
-        close(fd);
+        int fh = openat(rootFh, "otffsrc", O_RDONLY);
+        ERRIF(fh < 0);
+        parse(&pr, fh);
+        close(fh);
     }
 
-    ERRIF(avl_traverse(pr.names, (avl_VisitorFun)gatherFun, NULL));
-    
+    ERRIF(avl_traverse(pr.names, (avl_VisitorFun)otf_gatherFun, NULL));
+
     /* END MY CODE */
 
 

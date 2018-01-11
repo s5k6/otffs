@@ -68,6 +68,7 @@ avl_Tree avl_new(avl_CmpFun cmp) {
 
  */
 
+#define rotR(n) (n) = _rotR(n)
 static Node _rotR(Node y) {
     Node x = y->l;
     Node b = x->r;
@@ -75,8 +76,8 @@ static Node _rotR(Node y) {
     x->r = y; adjHeight(x);
     return x;
 }
-#define rotR(n) (n) = _rotR(n)
 
+#define rotL(n) (n) = _rotL(n)
 static Node _rotL (Node x) {
     Node y = x->r;
     Node b = y->l;
@@ -84,8 +85,48 @@ static Node _rotL (Node x) {
     y->l = x; adjHeight(y);
     return y;
 }
-#define rotL(n) (n) = _rotL(n)
 
+#define rebalance(n) (n) = _rebalance(n)
+static Node _rebalance(Node n) {
+    adjHeight(n);
+    /* FIXME: if the height did not change here, we will not need to
+       re-balance ever again on the way up! */
+
+    /* Cases for leaning left:
+
+       Maybe:
+
+             n              n
+            / \            / \
+           x   D          y   D
+          / \     ->     / \
+         A   y          x   C
+            / \        / \
+           B   C      A   B
+
+       Always:
+
+           n           y
+          / \         / \
+         y   C       A   n
+        / \     ->      / \
+       A   B           B   C
+    */
+
+    int b = bal(n);
+
+    if (b > 1) {
+        if (bal(n->l) < -1)
+            rotL(n->l);
+        rotR(n);
+    } else if (b < -1) {
+        if (bal(n->r) > 1)
+            rotR(n->r);
+        rotL(n);
+    }
+
+    return n;
+}
 
 
 struct insert_ctx {
@@ -126,53 +167,17 @@ static Node insert(struct insert_ctx *ctx, Node n) {
         /* Make sure to pass the incoming `key`.  This allows to free
            that key on collision in the `add` function. */
         n->v = ctx->add ? ctx->add(ctx->key, n->v, ctx->val) : ctx->val;
-        
+
         return n;
     }
 
-    adjHeight(n);
-    /* FIXME: if the height did not change here, we will not need to
-       re-balance ever again on the way up! */
-
-    /* Cases for leaning left:
-
-       Maybe:
-
-               n              n
-              / \            / \
-             x   D          y   D
-            / \     ->     / \
-           A   y          x   C
-              / \        / \
-             B   C      A   B
-
-       Always:
-
-               n           y
-              / \         / \
-             y   C       A   n
-            / \     ->      / \
-           A   B           B   C
-    */
-
-    int b = bal(n);
-
-    if (b > 1) {
-        if (bal(n->l) < -1)
-            rotL(n->l);
-        rotR(n);
-    } else if (b < -1) {
-        if (bal(n->r) > 1)
-            rotR(n->r);
-        rotL(n);
-    }
+    rebalance(n);
 
     return n;
 }
 
-
-
-int avl_insertWith(avl_AddFun add, avl_Tree t, avl_Key key, avl_Val val, avl_Val *old) {
+int avl_insertWith(avl_AddFun add, avl_Tree t, avl_Key key, avl_Val val,
+                   avl_Val *old) {
     struct insert_ctx ctx = {
         .add = add,
         .cmp = t->cmp,
@@ -188,6 +193,93 @@ int avl_insertWith(avl_AddFun add, avl_Tree t, avl_Key key, avl_Val val, avl_Val
 
 
 
+struct delete_ctx {
+    avl_CmpFun const cmp;
+    avl_VisitorFun const del;
+    avl_Key const key;
+    avl_State state;
+    int deleted;
+};
+
+#define replaceLeftmost(n,k,v) (n) = _replaceLeftmost(n,k,v)
+static Node _replaceLeftmost(Node n, avl_Key *k, avl_Val *v) {
+
+    if (n->l) {
+        replaceLeftmost(n->l, k, v);
+        rebalance(n);
+        return n;
+    }
+
+    *k = n->k;
+    *v = n->v;
+
+    Node ret = n->r;
+    free(n);
+
+    return ret;
+}
+
+#define delete(c,n) (n) = _delete(c, n)
+static Node _delete(struct delete_ctx *ctx, Node n) {
+
+    if (! n)
+        return n;
+
+    int c = ctx->cmp(ctx->key, n->k);
+
+    if (c < 0)
+        delete(ctx, n->l);
+
+    else if (c > 0)
+        delete(ctx, n->r);
+
+    else {
+        ctx->deleted = 1;
+
+        if (ctx->del)
+            ctx->del(n->k, n->v, ctx->state);
+
+        if (n->l && n->r) {
+            replaceLeftmost(n->r, &n->k, &n->v);
+            rebalance(n);
+
+            return n;
+        }
+
+        Node ret = n->l ? n->l : n->r;
+
+        free(n);
+        return ret;
+    }
+
+    rebalance(n);
+
+    return n;
+}
+
+int avl_deleteWith(avl_VisitorFun del, avl_Tree t, avl_Key key,
+                   avl_State state) {
+
+    if (! t->root)
+        return 0;
+
+    struct delete_ctx ctx = {
+        .cmp = t->cmp,
+        .del = del,
+        .key = key,
+        .state = state,
+        .deleted = 0,
+    };
+    delete(&ctx, t->root);
+    if (ctx.deleted)
+        t->size -= 1;
+
+    return ctx.deleted;
+}
+
+
+
+
 size_t avl_size(avl_Tree t) {
     return t->size;
 }
@@ -200,7 +292,7 @@ struct traverse_ctx {
 };
 
 static int traverse(struct traverse_ctx *ctx, Node n) {
-    
+
     if (!n)
         return 0;
 
@@ -278,14 +370,14 @@ struct free_ctx {
 static void freeNodes(struct free_ctx *ctx, Node n) {
     if (!n)
         return;
-    
+
     freeNodes(ctx, n->l);
-    
+
     if (ctx->visit)
         ctx->visit(n->k, n->v, ctx->state);
-    
+
     freeNodes(ctx, n->r);
-    
+
     free(n);
 }
 

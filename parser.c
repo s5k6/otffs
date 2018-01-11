@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <limits.h>
 
 #define MAX_NAME_LENGTH 128
 #define READ_BUF_SIZE (1<<10)
@@ -32,6 +33,7 @@ struct {
     { "Ti", 1UL << 40 }, { "T", 1000000000000 },
     { "Pi", 1UL << 50 }, { "P", 1000000000000000 },
     { "Ei", 1UL << 60 }, { "E", 1000000000000000000 },
+    { "x", -1 },
 };
 
 
@@ -41,7 +43,7 @@ struct {
 struct file uninitFile = {
     .size = -1,
     .srcName = NULL,
-    .srcSize = -1,
+    .srcSize = -1, // 
     .mode = 07000000, // FIXME really invalid?
     .nlink = 0,
     .atime = -1,
@@ -264,6 +266,12 @@ int parse(struct parseResult *pr, int fd) {
                 pState = pNext;
                 break;
             }
+            if (!strcmp("chars", AT(tok,t).str)) {
+                current->srcName = NULL;
+                current->srcSize = 2;
+                pState = pNext;
+                break;
+            }
             errx(1, "Unexpected fill mode `%s` before %ld:%ld",
                  AT(tok,t).str, AT(tok,t).lin, AT(tok,t).col);
             break;
@@ -293,7 +301,10 @@ int parse(struct parseResult *pr, int fd) {
             case tPlain:
                 {
                     char *e;
-                    current->size = strtol(AT(tok,t).str, &e, 10);
+                    long int x = strtol(AT(tok,t).str, &e, 10);
+                    ERRIF(x == LONG_MIN || x == LONG_MAX);
+                    ERRIF(x < 0);
+                    current->size = (ssize_t)x;
                     if (*e) {
                         off_t f = 0;
                         for (size_t s = 0; s < sizeof(suf)/sizeof(*suf); s++) {
@@ -322,7 +333,10 @@ int parse(struct parseResult *pr, int fd) {
             case tPlain:
                 {
                     char *e;
-                    current->mtime = strtol(AT(tok,t).str, &e, 10);
+                    long int x = strtol(AT(tok,t).str, &e, 10);
+                    ERRIF(x == LONG_MIN || x == LONG_MAX);
+                    ERRIF(x < 0);
+                    current->mtime = x;
                     if (*e)
                         errx(1, "Invalid unix time `%s` before %ld:%ld",
                              AT(tok,t).str, AT(tok,t).lin, AT(tok,t).col);
@@ -341,7 +355,10 @@ int parse(struct parseResult *pr, int fd) {
             case tPlain:
                 {
                     char *e;
-                    current->mode = (mode_t)strtol(AT(tok,t).str, &e, 8);
+                    long int x = strtol(AT(tok,t).str, &e, 8);
+                    ERRIF(x == LONG_MIN || x == LONG_MAX);
+                    ERRIF(x < 0 || 0777 < x);
+                    current->mode = (mode_t)x;
                     if (*e)
                         errx(1, "Invalid file mode `%s` before %ld:%ld",
                              AT(tok,t).str, AT(tok,t).lin, AT(tok,t).col);

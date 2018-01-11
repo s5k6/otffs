@@ -1,0 +1,80 @@
+#!/bin/bash
+set -u -e -C;
+shopt -s nullglob;
+
+function err { echo $'\e[1;31m'"$@"$'\e[m'; exit 1; }
+function warn { echo $'\e[1;35m'"$@"$'\e[m'; }
+function info { echo $'\e[36m'"$@"$'\e[m'; }
+
+function ask_yN {
+    local answer='';
+    read -n 1 -s -p $'\e[34m'"$* [yN]"$'\e[m' answer;
+    if test "${answer}" = y; then
+        info yes;
+        return 0;
+    fi;
+    info no;
+    return 1;
+}
+
+dir=testdir
+
+fusermount -u "$dir" 2>/dev/null || true
+mkdir -p "$dir"
+
+cp mnt/template "$dir"
+os="$(stat -c%s "${dir}/template")";
+
+cat <<EOF >|"${dir}/otffsrc"
+original : pass template
+EOF
+
+function size {
+    echo "\"size-${1}\" : pass template, size ${1}" >>"${dir}/otffsrc";
+}
+size $((RANDOM % 1024))
+size $((RANDOM % os))
+for i in '' k M G T P; do
+    size "$((RANDOM % 1000))${i}";
+done;
+for i in ki Mi Gi Ti Pi; do
+    size "$((RANDOM % 1024))${i}";
+done;
+size "$((RANDOM % 100000))x";
+
+exec 2>| "${dir}/log"
+date >&2;
+
+./otffs "$dir" &
+
+until test -e "${dir}/original"; do sleep 0.1; done
+
+ls -l -h --si "$dir";
+cmp mnt/template "${dir}/original"
+
+for f in "${dir}/"*; do
+    fs="$(stat -c%s "$f")";
+    if test "$fs" -le "$os"; then
+        dd iflag=count_bytes count="$fs" if="${dir}/original" 2>/dev/null |
+            cmp - "$f" && echo "$f" ok
+    elif test "$fs" -le "$((100 << 20))"; then
+        timeout -s9 5 ./cmprep "${dir}/original" "$f" && echo "$f" ok
+    else
+        for i in {0..9}; do
+            off="$(shuf -n1 -i0-"$((fs - os))")"
+            test "$((off + os))" -lt "$fs" || err 'xcrZLRPxcKKA'
+            s=$((off % os))
+            echo "$f,$i fs=$fs off=$off os=$os s=$s"
+            cmp \
+                <(dd iflag=skip_bytes,count_bytes skip="$off" count="$os" \
+                     if="${f}" 2>/dev/null) \
+                <(dd iflag=skip_bytes  skip="$s" if="${dir}/original" \
+                     2>/dev/null;
+                  dd iflag=count_bytes count="$s" if="${dir}/original" \
+                     2>/dev/null
+                 )
+        done;
+    fi
+done
+
+fusermount -u "$dir";

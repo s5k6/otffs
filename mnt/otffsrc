@@ -1,8 +1,43 @@
-shorter:   pass "template", size 10k, mode 640
-longer:    pass "template", size 100M
-large:     pass "template", size 1300M
-excessive: pass template, size 12E
-README:    pass "../README", mtime 1515038333
-template:  pass
-megabyte:  fill integers, size 100M
-petabyte:  fill integers, size 3P
+
+
+# The file `otffsrc` is just passed through from the file of the same
+# name which was available under the mountpoint before mounting.  It
+# is not necessary to do so, but this allows you to review the
+# configuration while the FSis mounted.  Also, the modification
+# timestamp is set to the beginning of the epoch — just for fun.
+
+otffsrc: pass, mtime 0
+
+
+# The file `shorter` will contain the first 128 bytes of the source file
+# `template`, and its mode will be u=rw,g=r.  Note that actually
+# writing to this file will still fail: The FS is readonly!
+
+shorter: pass template, size 128, mode 640
+
+# The files `large`, and `excessive` are sufficiently many
+# concatenations of the source file `template`, to provide the
+# specified size.  `excessive` is in the exabyte region (it is exactly
+# 9.3EB, or 8EiB large), and even standard tools like dd(1) may
+# struggle with that.
+
+large:     pass template, size 1300M
+excessive: pass template, size 9223372036854775806   # as big as it gets
+
+
+# One can also specify the exact amount of repetitions of the source.
+# This makes sense if the source may not be truncated at arbitrary
+# positions, e.g., XML code.
+
+five: pass template, size 5x
+
+
+# Another way to produce file content is by simply filling it
+# algorithmically.  Not specifying a size will chose what the
+# algorithm can produce without repetition.  Currently only `integers`
+# and `chars` are implemented, which repeats all values of the
+# respective unsigned type in the platform's native encoding.  Use a
+# hexdump tool to investigate these.
+
+integers:  fill integers
+chars:     fill chars, size 1000000x

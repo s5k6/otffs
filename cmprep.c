@@ -14,7 +14,7 @@ int main(int argc, char **argv)
 {
     warnx("Comparing two files, repeating the *first* to "
           "match length of second");
-    
+
     if (argc < 3)
         errx(1, "Need two file arguments");
 
@@ -28,7 +28,7 @@ int main(int argc, char **argv)
     fstat(fd1, &sb);
     s1 = (size_t)sb.st_size;
     fmap_map(&m1, fd1, 0, s1);
-        
+
     fd2 = open(argv[2], O_RDONLY);
     ERRIF(fd2 < 0);
     fstat(fd2, &sb);

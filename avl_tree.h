@@ -68,6 +68,17 @@ int avl_insertWith(avl_AddFun add, avl_Tree t, avl_Key key, avl_Val val,
 
 
 
+/* Remov `key` from the tree, if present.  Stores any old value in
+   `*old` if not `NULL`.  Returns 1 if an item was deleted, 0 if none
+   was found. */
+
+int avl_deleteWith(avl_VisitorFun del, avl_Tree t, avl_Key key,
+                   avl_State state);
+
+#define avl_delete(t, key, val, st) avl_deleteWith(NULL, t, key, val, NULL)
+
+
+
 /* Return the number of items stored in the tree. */
 
 size_t avl_size(avl_Tree t);

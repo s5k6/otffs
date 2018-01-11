@@ -19,16 +19,7 @@ distclean:
 	git clean -xdf
 
 test : all cmprep 
-	fusermount -u mnt || true
-	test -e mnt/random || dd if=/dev/urandom of=mnt/template bs=1k count=100;
-	./otffs mnt &
-	ls -T0 --color=auto --si -l mnt
-	until test -r mnt/shorter; do sleep 0.2; done
-	cmp README mnt/README
-	./cmprep mnt/template mnt/shorter
-	./cmprep mnt/template mnt/longer
-	./cmprep mnt/template mnt/large
-	fusermount -u mnt
+	./test1
 
 otffs : otffs.o fmap.o parser.o avl_tree.o
 	gcc -o $@ $(shell pkg-config fuse3 --libs) $^
