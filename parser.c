@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 
-#include "macros.h"
+#include "common.h"
 #include "parser.h"
 #include <ctype.h>
 #include <fcntl.h>
@@ -12,15 +12,6 @@
 #define MAX_NAME_LENGTH 128
 #define READ_BUF_SIZE (1<<10)
 
-
-// FIXME: duplicated code: otffs.c
-static void *_new(size_t size) {
-    void *tmp = malloc(size);
-    if (!tmp)
-        err(1, "allcating %zu bytes", size);
-    return tmp;
-}
-#define new(ty) _new(sizeof(ty))
 
 
 struct {
@@ -34,20 +25,6 @@ struct {
     { "Pi", 1UL << 50 }, { "P", 1000000000000000 },
     { "Ei", 1UL << 60 }, { "E", 1000000000000000000 },
     { "x", -1 },
-};
-
-
-/* New file records are initialisedfrom here.  Values not set by the
-   user may be retriefed rom thefile system, or made up. */
-
-struct file uninitFile = {
-    .size = -1,
-    .srcName = NULL,
-    .srcSize = -1, // 
-    .mode = 07000000, // FIXME really invalid?
-    .nlink = 0,
-    .atime = -1,
-    .mtime = -1,
 };
 
 
@@ -259,22 +236,24 @@ int parse(struct parseResult *pr, int fd) {
                  AT(tok,t).str, AT(tok,t).lin, AT(tok,t).col, name);
             break;
 
-        case pFill:
-            if (!strcmp("integers", AT(tok,t).str)) {
-                current->srcName = NULL;
-                current->srcSize = 1;
-                pState = pNext;
-                break;
+        case pFill: {
+            unsigned int found = 0;
+            for (unsigned int i = 1; algorithms[i]; i++) {
+                if (!strcmp(algorithms[i], AT(tok,t).str)) {
+                    found = i;
+                    break;
+                }
             }
-            if (!strcmp("chars", AT(tok,t).str)) {
+            if (found) {
                 current->srcName = NULL;
-                current->srcSize = 2;
+                current->srcSize = found;
                 pState = pNext;
                 break;
             }
             errx(1, "Unexpected fill mode `%s` before %ld:%ld",
                  AT(tok,t).str, AT(tok,t).lin, AT(tok,t).col);
             break;
+        }
 
         case pPass:
             switch (AT(tok,t).ty) {

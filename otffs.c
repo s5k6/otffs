@@ -2,7 +2,7 @@
 #define _GNU_SOURCE // reallocarray
 
 #include "fmap.h"
-#include "macros.h"
+#include "common.h"
 #include "parser.h"
 #include <dirent.h>
 #include <err.h>
@@ -22,38 +22,31 @@
 #define munmap DO_NOT_USE
 
 #define MAX_NAME_LENGTH 128
-#define DEFAULT_TIMEOUT 1.0
-
-
-static void *_new(size_t size) {
-    void *tmp = malloc(size);
-    if (! tmp)
-        err(1, "allcating %zu bytes", size);
-    return tmp;
-}
-#define new(ty) _new(sizeof(ty))
+#define DEFAULT_TIMEOUT 5.0
 
 
 struct parseResult pr;
 
-struct timespec now; // time of starting `otffs`
+struct timespec startupTime; // time of starting `otffs`
 
 static int rootFh = -1; // handle of pre-mount mount point
 static int logFh = -1; // handle of log file, if open
 
+static const char *hello =
+    "otffs: This is On The Fly File System version " VERSION ".\n";
 
 #define log(fmt, ...) do {                                       \
-        if (logFh >= 0) dprintf(logFh, fmt, __VA_ARGS__);        \
+        if (logFh >= 0) dprintf(logFh, "oftts: " fmt "\n", __VA_ARGS__);   \
     } while (0)
 
 
 static int otf_stat(struct stat *buf, fuse_ino_t ino) {
 
     struct file *fp = AT(pr.files, ino);
-    
+
     if (! fp)
         return -EBADF;
-        
+
     ERRIF(fp->size > LONG_MAX); // FIXME: max of off_t?
 
     zero(buf);
@@ -64,6 +57,7 @@ static int otf_stat(struct stat *buf, fuse_ino_t ino) {
         .st_size = (off_t)fp->size,
         .st_atime = fp->atime,
         .st_mtime = fp->mtime,
+        .st_ctime = fp->ctime,
         .st_uid = getuid(),
         .st_gid = getgid(),
         .st_blksize = 1 << 10,
@@ -122,13 +116,13 @@ static void otf_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
         ERRIF(fuse_reply_err(req, ENOTDIR));
         return;
     }
-    
+
     if ((size_t)off >= size) {
         log("readdir(%ld) returns 0 bytes", ino);
         ERRIF(fuse_reply_buf(req, NULL, 0));
         return;
     }
-    
+
     struct addFun_ctx buf = {
         .p = NULL,
         .s = 0,
@@ -198,6 +192,10 @@ static void otf_open(fuse_req_t req, fuse_ino_t ino,
         return;
     }
 
+    struct timespec now;
+    ERRIF(clock_gettime(CLOCK_REALTIME, &now));
+    fp->atime = now.tv_sec;
+
     int fh;
     if (fp->srcName) {
         fh = openat(rootFh, fp->srcName, O_RDONLY);
@@ -225,7 +223,7 @@ static void otf_release(fuse_req_t req, fuse_ino_t ino,
         ERRIF(fuse_reply_err(req, EBADF));
         return;
     }
-        
+
     if (fp->srcName)
         close((int)(fi->fh));
     log("release(%ld) = 0", ino);
@@ -261,7 +259,7 @@ static void otf_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
 
 
 
-static void otf_readFromFile(fuse_req_t req, int handle, struct file *fp,
+static void otf_useFile(fuse_req_t req, int handle, struct file *fp,
                          size_t off, size_t amount) {
 
     /* Produce a file that is a repetition of the source file. */
@@ -279,7 +277,7 @@ static void otf_readFromFile(fuse_req_t req, int handle, struct file *fp,
              fp->srcName, b, amount, c, IOV_MAX);
 
     if (k == l) { // start and end in same block
-        
+
         assert(s < e);
         assert(e < b);
         assert(amount == e - s);
@@ -293,10 +291,10 @@ static void otf_readFromFile(fuse_req_t req, int handle, struct file *fp,
 
         struct mapping m;
         fmap_map(&m, handle, 0, (size_t)b);
-        
+
         struct iovec *vector = calloc((size_t)c, sizeof(struct iovec));
         ERRIF(! vector);
-        
+
         vector[0] = (struct iovec){
             .iov_base = m.buf + s,
             .iov_len = (size_t)(b - s)
@@ -310,16 +308,16 @@ static void otf_readFromFile(fuse_req_t req, int handle, struct file *fp,
             .iov_base = m.buf,
             .iov_len = (size_t)e
         };
-        
+
         ERRIF(fuse_reply_iov(req, vector, (int)(c)));
-        
+
         fmap_unmap(&m);
         free(vector);
 
     }
 }
 
-static void otf_readFromIntegers(fuse_req_t req, size_t off, size_t amount) {
+static void otf_useIntegers(fuse_req_t req, size_t off, size_t amount) {
     size_t
         s = sizeof(unsigned int), // size of one item
         d = off % s, // delta between offset and item boundary
@@ -337,7 +335,7 @@ static void otf_readFromIntegers(fuse_req_t req, size_t off, size_t amount) {
     free(buf);
 }
 
-static void otf_readFromChars(fuse_req_t req, size_t off, size_t amount) {
+static void otf_useChars(fuse_req_t req, size_t off, size_t amount) {
     size_t
         s = sizeof(unsigned char), // size of one item
         d = off % s, // delta between offset and item boundary
@@ -360,7 +358,7 @@ static void otf_read(fuse_req_t req, fuse_ino_t ino, size_t len, off_t _off,
 
     ERRIF(_off < 0);
     size_t off = (size_t)_off;
-    
+
     struct file *fp = AT(pr.files, ino);
 
     if (! fp) {
@@ -379,11 +377,11 @@ static void otf_read(fuse_req_t req, fuse_ino_t ino, size_t len, off_t _off,
 
     log("read(%ld, %zu, %zu) returns %zu bytes", ino, off, len, amount);
     if (fp->srcName)
-        otf_readFromFile(req, (int)(fi->fh), fp, off, amount);
-    else if (fp->srcSize == 1)
-        otf_readFromIntegers(req, off, amount);
-    else if (fp->srcSize == 2)
-        otf_readFromChars(req, off, amount);
+        otf_useFile(req, (int)(fi->fh), fp, off, amount);
+    else if (fp->srcSize == algoIntegers)
+        otf_useIntegers(req, off, amount);
+    else if (fp->srcSize == algoChars)
+        otf_useChars(req, off, amount);
     else
         assert(0);
 }
@@ -438,11 +436,13 @@ static int otf_gatherFun(char *name, ino_t ino, void *foo) {
     } else {
         if (fp->size < 0) {
             switch (fp->srcSize) {
-            case 1:
+            case 0: // root directory
+                break;
+            case 1: // fill integers
                 fp->size = (ssize_t)((size_t)(-fp->size) *
                                      sizeof(unsigned int) * (UINT_MAX + 1L));
                 break;
-            case 2:
+            case 2: // fill chars
                 fp->size = (ssize_t)((size_t)(-fp->size) *
                                      sizeof(unsigned char) * (UCHAR_MAX + 1L));
                 break;
@@ -456,16 +456,19 @@ static int otf_gatherFun(char *name, ino_t ino, void *foo) {
             fp->mode = S_IFREG | 0600;
 
         if (fp->mtime == uninitFile.mtime)
-            fp->mtime = now.tv_sec;
+            fp->mtime = startupTime.tv_sec;
 
         if (fp->atime == uninitFile.atime)
-            fp->atime = now.tv_sec;
+            fp->atime = startupTime.tv_sec;
     }
 
     if (fp->nlink == uninitFile.nlink)
         fp->nlink = 1;
 
-    char const *gen[] = { "root", "integers", "chars" };
+    if (fp->ctime == uninitFile.ctime)
+        fp->ctime = startupTime.tv_sec;
+
+#if 1 //eJILSvajWpL4
 
     struct tm tmBuf;
     ERRIF(! localtime_r(&fp->mtime, &tmBuf));
@@ -476,11 +479,11 @@ static int otf_gatherFun(char *name, ino_t ino, void *foo) {
     };
     char dateBuf[128];
     ERRIF(! strftime(dateBuf, 128, fmt[
-        now.tv_sec - fp->mtime > 365 * 24 * 60 * 60
+        startupTime.tv_sec - fp->mtime > 365 * 24 * 60 * 60
     ], &tmBuf));
 
     if (fp->srcName)
-        log("%05o %s %s %luB (file:%s %ldB)",
+        log("added %05o %s %s %luB (file:%s %ldB)",
               fp->mode & 077777,
               dateBuf,
               name,
@@ -488,18 +491,29 @@ static int otf_gatherFun(char *name, ino_t ino, void *foo) {
               fp->srcName,
               fp->srcSize);
     else
-        log("%05o %s %s %luB (otffs:%s)",
+        log("added %05o %s %s %luB (otffs:%s)",
               fp->mode & 077777,
               dateBuf,
               name,
               fp->size,
-              gen[fp->srcSize]);
+              algorithms[fp->srcSize]);
+#endif //eJILSvajWpL4
 
     return 0;
 }
 
 
 int main(int argc, char *argv[]) {
+
+#if 1 //J2RTUVx5yO5P
+    //logFh = open("/proc/self/otffs.log", O_WRONLY | O_CREAT | O_APPEND, 0666);
+    logFh = 2;
+    ERRIF(logFh < 0);
+#endif //J2RTUVx5yO5P
+
+    dprintf(logFh, hello);
+
+    /* BEGIN Code copied from libfuse docs */
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
     struct fuse_session *se;
     struct fuse_cmdline_opts opts;
@@ -519,55 +533,54 @@ int main(int argc, char *argv[]) {
         ret = 0;
         goto err_out1;
     }
+    /* END Code copied from libfuse docs */
 
+    ERRIF(clock_gettime(CLOCK_REALTIME, &startupTime));
 
-    /* BEGIN MY CODE */
-
-#if 0
-    logFh = open("otffs.log", O_WRONLY | O_CREAT | O_APPEND, 0666);
-    ERRIF(logFh < 0);
-#endif
-    
-    ERRIF(clock_gettime(CLOCK_REALTIME, &now));
+    if (! opts.mountpoint)
+        errx(1, "No mountpoint given on command line.  See the accom"
+             "panying README for documentation.");
 
     rootFh = open(opts.mountpoint, O_RDONLY|O_DIRECTORY);
+    if (rootFh < 0)
+        err(1, "Failed to open mountpoint directory: %s", opts.mountpoint);
 
     pr.names = avl_new((avl_CmpFun)strcmp);
     ALLOCATE(pr.files, min(FUSE_ROOT_ID + 1, 8));
 
     { // add root directory
         char *name = strdup(".");
-        ERRIF(!name);
-        ERRIF(avl_insert(pr.names, name, FUSE_ROOT_ID, NULL));
+        ERRIF(! name);
+        assert(! avl_insert(pr.names, name, FUSE_ROOT_ID, NULL));
 
         struct file *buf = new(struct file);
         *buf = uninitFile;
-        *buf = (struct file){
-            .mode = S_IFDIR | 0755,
-            .nlink = 2,
-            .atime = now.tv_sec,
-            .mtime = now.tv_sec,
-        };
+        buf->size = 0;
+        buf->srcSize = 0;
+        buf->mode = S_IFDIR | 0755;
+        buf->nlink = 2;
+        buf->atime = startupTime.tv_sec;
+        buf->mtime = startupTime.tv_sec;
+        buf->ctime = startupTime.tv_sec;
 
         pr.files.array[FUSE_ROOT_ID] = buf;
         pr.files.used = FUSE_ROOT_ID + 1;
     }
 
-
     {
         int fh = openat(rootFh, "otffsrc", O_RDONLY);
-        ERRIF(fh < 0);
+        if (fh < 0)
+            err(1, "Failed to open config file: %s/otffsrc",
+                opts.mountpoint);
         parse(&pr, fh);
         close(fh);
     }
 
+    /* For all files in the config, gather missing information from
+       the filesystem, or elsewhere. */
     ERRIF(avl_traverse(pr.names, (avl_VisitorFun)otf_gatherFun, NULL));
 
-    /* END MY CODE */
-
-
-
-
+    /* BEGIN Code copied from libfuse docs */
     se = fuse_session_new(&args, &ops, sizeof(ops), NULL);
 
     if (se == NULL)
@@ -597,4 +610,5 @@ int main(int argc, char *argv[]) {
     fuse_opt_free_args(&args);
 
     return ret ? 1 : 0;
+    /* END Code copied from libfuse docs */
 }

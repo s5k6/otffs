@@ -22,6 +22,7 @@ dir=testdir
 fusermount -u "$dir" 2>/dev/null || true
 mkdir -p "$dir"
 
+#dd if=/dev/urandom of="${dir}/template" bs=1k count=10
 cp mnt/template "$dir"
 os="$(stat -c%s "${dir}/template")";
 
@@ -42,37 +43,35 @@ for i in ki Mi Gi Ti Pi; do
 done;
 size "$((RANDOM % 100000))x";
 
-exec 2>| "${dir}/log"
-date >&2;
-
-./otffs "$dir" &
-
+info "mounting otffs on $dir"
+./otffs "$dir" 2>| "${dir}/log"&
 until test -e "${dir}/original"; do sleep 0.1; done
 
-ls -l -h --si "$dir";
+info "running tests"
+
+echo simple pass
 cmp mnt/template "${dir}/original"
 
 for f in "${dir}/"*; do
     fs="$(stat -c%s "$f")";
     if test "$fs" -le "$os"; then
-        dd iflag=count_bytes count="$fs" if="${dir}/original" 2>/dev/null |
-            cmp - "$f" && echo "$f" ok
-    elif test "$fs" -le "$((100 << 20))"; then
-        timeout -s9 5 ./cmprep "${dir}/original" "$f" && echo "$f" ok
+        echo "short $f"
+        dd status=none iflag=count_bytes count="$fs" if="${dir}/original" | cmp - "$f"
+    elif test "$fs" -le "$((250 << 20))"; then
+        echo "medium $f"
+        ./cmprep "${dir}/original" "$f"
     else
-        for i in {0..9}; do
+        for i in {1..10}; do
             off="$(shuf -n1 -i0-"$((fs - os))")"
+            echo "huge $f $off..$((off + os - 1))"
             test "$((off + os))" -lt "$fs" || err 'xcrZLRPxcKKA'
             s=$((off % os))
-            echo "$f,$i fs=$fs off=$off os=$os s=$s"
             cmp \
-                <(dd iflag=skip_bytes,count_bytes skip="$off" count="$os" \
-                     if="${f}" 2>/dev/null) \
-                <(dd iflag=skip_bytes  skip="$s" if="${dir}/original" \
-                     2>/dev/null;
-                  dd iflag=count_bytes count="$s" if="${dir}/original" \
-                     2>/dev/null
-                 )
+                <(dd status=none iflag=skip_bytes,count_bytes skip="$off" count="$os" \
+                     if="${f}") \
+                <(dd status=none iflag=skip_bytes  skip="$s"  if="${dir}/original";
+                  dd status=none iflag=count_bytes count="$s" if="${dir}/original"
+                 );
         done;
     fi
 done

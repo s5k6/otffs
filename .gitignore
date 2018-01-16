@@ -6,3 +6,5 @@ cmprep
 TAGS
 parsetest
 *.gch
+testdir
+*.d

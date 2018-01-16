@@ -1,6 +1,6 @@
 #include "fmap.h"
 
-#include "macros.h"
+#include "common.h"
 #include <sys/mman.h>
 #include <unistd.h>
 #include <err.h>

@@ -2,7 +2,7 @@
 /* BEGIN COPY CODE */
 
 #include "fmap.h"
-#include "macros.h"
+#include "common.h"
 #include <err.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -12,9 +12,6 @@
 
 int main(int argc, char **argv)
 {
-    warnx("Comparing two files, repeating the *first* to "
-          "match length of second");
-
     if (argc < 3)
         errx(1, "Need two file arguments");
 
@@ -40,7 +37,6 @@ int main(int argc, char **argv)
             errx(1, "Difference at %zu: %s[%zu] != %s[%zu]",
                  i, argv[1], i % s1, argv[2], i % s2);
     }
-    warnx("Compared %zu bytes: All equal", s2);
 
     return 0;
 }

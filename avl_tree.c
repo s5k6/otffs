@@ -1,18 +1,7 @@
 
 #include "avl_tree.h"
-#include "macros.h"
+#include "common.h"
 #include <stdio.h>
-
-
-
-static void *_new(size_t size) {
-    void *tmp = malloc(size);
-    if (!tmp)
-        err(1, "allcating %zu bytes", size);
-    return tmp;
-}
-
-#define new(ty) _new(sizeof(ty))
 
 
 

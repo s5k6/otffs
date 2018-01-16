@@ -1,41 +1,42 @@
 
-CFLAGS = -std=c99 -g -Wall -Wextra -Wpedantic -Wbad-function-cast -Wconversion -Wwrite-strings -Wstrict-prototypes -Werror
+src = $(wildcard *.c)
+obj = $(patsubst %.c,%.o,$(src))
+dep = $(patsubst %.c,%.d,$(src))
 
-SRC = $(wildcard *.c)
-OBJ = $(patsubst %.c,%.o,$(SRC))
-GCH = $(patsubst %,%.gch,$(wildcard *.h))
+version = "$(shell git describe --dirty --always --tags)"
 
-TARGETS = otffs
-
+targets = otffs
 
 .PHONY: all clean distclean test
 
-all : $(TARGETS)
+all : $(targets)
 
 clean:
-	rm -f $(OBJ) $(GCH)
+	rm -f $(obj) $(dep)
 
 distclean: 
 	git clean -xdf
 
-test : all cmprep 
+test : otffs cmprep 
 	./test1
 
-otffs : otffs.o fmap.o parser.o avl_tree.o
+include $(dep)
+
+%.d : %.c
+	gcc @cflags -MM $< > $@
+
+otffs : otffs.o fmap.o parser.o avl_tree.o common.o
 	gcc -o $@ $(shell pkg-config fuse3 --libs) $^
+	strip $@
 
 cmprep : cmprep.o fmap.o
-	gcc -o $@ $(CFLAGS) $^
+	gcc -o $@ @cflags $^
 
-parsetest : parsetest.o parser.o avl_tree.o
-
-fmap.o : fmap.c fmap.h
-
-parser.o : parser.c parser.h
+parsetest: parsetest.o parser.o avl_tree.o common.o
+	gcc -o $@ @cflags $^
 
 otffs.o : otffs.c
-	gcc -c $(CFLAGS) $(shell pkg-config fuse3 --cflags) $^
+	gcc @cflags -DVERSION='$(version)' $(shell pkg-config fuse3 --cflags) -c $<
 
 %.o : %.c
-	gcc -c $(CFLAGS) $^
-
+	gcc @cflags -c $<
