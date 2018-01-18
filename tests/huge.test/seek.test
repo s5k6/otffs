@@ -1,0 +1,28 @@
+#!/bin/bash
+set -u -e -C;
+
+repo="$(git rev-parse --show-toplevel)";
+
+# original size
+os="$(stat -c%s mnt/template)";
+
+for f in mnt/size*; do
+    fs="$(stat -c%s "$f")";
+    if test "$fs" -le "$os"; then
+        dd status=none iflag=count_bytes count="$fs" if=mnt/template | cmp - "$f";
+    elif test "$fs" -le "$((250 << 20))"; then
+        $repo/tools/cmprep mnt/template "$f";
+    else
+        for i in {1..10}; do
+            off="$(shuf -n1 -i0-"$((fs - os))")";
+            test "$((off + os))" -lt "$fs";
+            s=$((off % os));
+            cmp \
+                <(dd status=none iflag=skip_bytes,count_bytes skip="$off" count="$os" \
+                     if="${f}") \
+                <(dd status=none iflag=skip_bytes  skip="$s"  if=mnt/template;
+                  dd status=none iflag=count_bytes count="$s" if=mnt/template
+                 );
+        done;
+    fi;
+done;

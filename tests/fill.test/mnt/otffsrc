@@ -1,0 +1,6 @@
+integers:  fill integers
+integers2: fill integers, size 2x
+integers3: fill integers, size 3M
+integers4: fill integers, size 100Mi
+chars:     fill chars
+manychars: fill chars, size 1000000x

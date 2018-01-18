@@ -1,0 +1,21 @@
+#!/bin/bash
+set -u -e -C;
+shopt -s nullglob;
+
+function err { echo $'\e[1;31m'"$@"$'\e[m' >&2; exit 1; }
+function warn { echo $'\e[1;35m'"$@"$'\e[m' >&2; }
+function info { echo $'\e[36m'"$@"$'\e[m'; }
+
+function ask_yN {
+    local answer='';
+    read -n 1 -s -p $'\e[34m'"$* [yN]"$'\e[m' answer;
+    if test "${answer}" = y; then
+        info yes;
+        return 0;
+    fi;
+    info no;
+    return 1;
+}
+
+cd "$(git rev-parse --show-toplevel)";
+sed -r -i 's/\s+$//' *.[ch];

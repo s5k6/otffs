@@ -1,0 +1,8 @@
+#!/bin/bash
+set -u -e -C;
+
+base="$(basename "$0" .test)";
+
+hexdump -v -s 0 -n $((32 * 4)) -e '"%016_ax " 16/1 " %02x" "\n"' mnt/chars >|"$base.found.tmp"
+
+cmp "$base.found.tmp" "$base.expect";

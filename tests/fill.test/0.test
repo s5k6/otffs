@@ -1,0 +1,22 @@
+#!/bin/bash
+set -u -e -C;
+
+base="$(basename "$0" .test)";
+
+exec >|"$base.expect.tmp";
+echo mnt/integers  $((256 ** 4 * 4))
+echo mnt/integers2 $((256 ** 4 * 4 * 2))
+echo mnt/integers3 $((3 * 1000 ** 2))
+echo mnt/integers4 $((100 * 1024 ** 2))
+echo mnt/chars     $((256))
+echo mnt/manychars $((1000000 * 256))
+
+exec >|"$base.found.tmp";
+stat -c'%n %s' mnt/integers
+stat -c'%n %s' mnt/integers2
+stat -c'%n %s' mnt/integers3
+stat -c'%n %s' mnt/integers4
+stat -c'%n %s' mnt/chars
+stat -c'%n %s' mnt/manychars
+
+cmp "$base.found.tmp" "$base.expect.tmp";

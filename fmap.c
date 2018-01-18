@@ -1,9 +1,8 @@
-#include "fmap.h"
-
 #include "common.h"
+#include "fmap.h"
+#include <err.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <err.h>
 
 void fmap_map(struct mapping *m, int fd, size_t off, size_t len) {
     size_t

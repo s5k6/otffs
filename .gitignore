@@ -1,10 +1,5 @@
-libfuse
 *.o
-fakefs
 otffs
-cmprep
 TAGS
-parsetest
-*.gch
-testdir
 *.d
+test.log

@@ -1,0 +1,7 @@
+#!/bin/bash
+set -u -e -C;
+shopt -s nullglob;
+
+repo="$(git rev-parse --show-toplevel)";
+
+$repo/tests/umount-mnt || true;

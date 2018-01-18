@@ -1,0 +1,17 @@
+#!/bin/bash
+set -u -e -C;
+
+repo="$(git rev-parse --show-toplevel)";
+
+if mountpoint mnt >/dev/null; then exit 1; fi;
+
+"$repo/otffs" mnt &
+
+count=0;
+
+until mountpoint mnt >/dev/null; do
+    sleep 0.1;
+    if test "$((count++))" -gt 10; then exit 1; fi;
+done;
+
+exit 0;

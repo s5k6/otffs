@@ -1,0 +1,30 @@
+0 = open(mnt/gen)
+1 = open(mnt/gen)
+2 = open(mnt/gen)
+3 = open(mnt/gen)
+4 = open(mnt/gen)
+5 = open(mnt/gen)
+6 = open(mnt/gen)
+7 = open(mnt/gen)
+8 = open(mnt/gen)
+9 = open(mnt/gen)
+Reference string has length 10
+read(1) returned expected 10 bytes
+read(2) returned expected 10 bytes
+read(3) returned expected 10 bytes
+read(4) returned expected 10 bytes
+read(5) returned expected 10 bytes
+read(6) returned expected 10 bytes
+read(7) returned expected 10 bytes
+read(8) returned expected 10 bytes
+read(9) returned expected 10 bytes
+close(0)
+close(1)
+close(2)
+close(3)
+close(4)
+close(5)
+close(6)
+close(7)
+close(8)
+close(9)

@@ -1,0 +1,25 @@
+#!/bin/bash
+set -u -e -C;
+shopt -s nullglob;
+
+repo="$(git rev-parse --show-toplevel)";
+
+mkdir -p mnt
+
+rm -f mnt/otffsrc;
+rm -f modes.expect.tmp
+for i in {00..99}; do
+    m="$(printf %03o "$(shuf -n1 -i0-511)")";
+    echo "\"file_$i\" : fill chars, mode $m" >>mnt/otffsrc;
+    echo "mnt/file_$i $m" >>modes.expect.tmp;
+done;
+
+$repo/tests/mount-mnt
+trap $repo/tests/umount-mnt EXIT
+
+rm -f modes.found.tmp
+for i in {00..99}; do
+    stat -c'%n %03a' "mnt/file_$i" >>modes.found.tmp;
+done;
+
+cmp modes.expect.tmp modes.found.tmp

@@ -1,3 +1,5 @@
 -std=c99
 -Wall -Wextra -Wpedantic
--Wbad-function-cast -Wconversion -Wwrite-strings -Wstrict-prototypes -Werror
+-Wbad-function-cast -Wconversion -Wwrite-strings -Wstrict-prototypes
+-Werror
+-DNDEBUG

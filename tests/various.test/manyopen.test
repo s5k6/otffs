@@ -1,0 +1,9 @@
+#!/bin/bash
+set -u -e -C;
+
+repo="$(git rev-parse --show-toplevel)";
+base="$(basename "$0" .test)";
+
+$repo/tools/manyopen mnt/gen >|"$base.found.tmp"
+
+cmp "$base.found.tmp" "$base.expect";

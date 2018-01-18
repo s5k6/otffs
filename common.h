@@ -3,39 +3,67 @@
 
 
 
-#include <string.h>
-#include <err.h>
 #include "avl_tree.h"
-#include <sys/types.h>
+#include <err.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
 
 
+/* */
+#ifdef DEBUG
+#error DEBUG is defined, use NDEBUG instead
+#endif
 
-// this is not assert: not intended to be disabled in non-debug mode
-#define ERRIF(c) do {                                             \
-        if (c)                                                    \
-            err(1, #c " at " __FILE__ ":%d because", __LINE__);   \
+#ifndef NDEBUG
+#define DEBUG
+#endif
+
+
+/* This is not assert: It is not intended to be disabled in non-debug
+   mode.  Use this for acceptable runtime errors to terminate the
+   program. */
+
+#define ERRIF(c) do {                           \
+        if (c)                                  \
+            err(1, "Fatal " #c " at " __FILE__  \
+                ":%d; errno", __LINE__);        \
     } while (0)
 
+/* Placeholder */
+
+#ifndef NDEBUG
 #define NOT_IMPLEMENTED errx(1, "NOT IMPLEMENTED " __FILE__ ":%d", __LINE__)
+#endif
 
 
+/* generic extrema */
 
 #define min(x, y) ((x) < (y) ? (x) : (y))
-
 #define max(x, y) ((x) > (y) ? (x) : (y))
 
 
 
-void *_new(size_t size);
+/* Frontend to `malloc` for very simple cases.  Terminates the program
+   if `malloc` fails. */
 
 #define new(ty) _new(sizeof(ty))
+void *_new(size_t size);
+
+/* Zero out memory indicated by pointer. */
 
 #define zero(ptr) memset(ptr, 0, sizeof(*ptr))
 
 
 
+/* An array-based stack.  `STACK(foo)` is the type, so `STACK(int)
+   bar` declares variable `bar` to be a stack of integers.  The stack
+   is not initialised. */
+
 #define STACK(ty) struct { size_t alloc, used; ty *array; }
+
+/* Allocate memory in stack `foo` for `s` entries.  The stack is
+   empty.  Terminates the program if `malloc` fails. */
 
 #define ALLOCATE(foo, s) do {                                   \
         foo.alloc = s;                                          \
@@ -43,6 +71,9 @@ void *_new(size_t size);
         foo.array = malloc(foo.alloc * sizeof(*foo.array));     \
         ERRIF(!foo.array);                                      \
     } while (0)
+
+/* If stack `foo` is full, double its size.  Terminates the program if
+   `realloc` fails. */
 
 #define ENOUGH(foo) do {                                                \
         if (foo.used >= foo.alloc) {                                    \
@@ -52,19 +83,41 @@ void *_new(size_t size);
         }                                                               \
     } while (0)
 
+
+/* Reduce allocated memory of stack to the minimum required to contain
+   its items.  If stack `foo` is full, double its size.  Terminates
+   the program if `realloc` fails. */
+
 #define TRIM(foo) do {                                                  \
         foo.alloc = foo.used;                                           \
-        foo.array = realloc(foo.array, foo.alloc * sizeof(*foo.array)); \
-        ERRIF(!foo.array);                                              \
+        if (foo.alloc) {                                                \
+            foo.array = realloc(foo.array, foo.alloc * sizeof(*foo.array)); \
+            ERRIF(!foo.array);                                          \
+        } else {                                                        \
+            free(foo.array);                                            \
+            foo.array = NULL;                                           \
+        }                                                               \
     } while (0)
+
+/* Push `val` on stack `foo`.  The result is undefined if the stack is
+   not large enough.  No check is performed! */
 
 #define PUSH(foo, val) (foo.array[foo.used++] = (val))
 
+/* Pop value from stack `foo`.  The result is undefined if the stack
+   is empty.  No check is performed! */
+
 #define POP(foo) (foo.array[--foo.used])
+
+/* Get `idx`-th value from stack.  The result is undefined if the
+   stack is not large enough.  No check is performed! */
 
 #define AT(foo, idx) (foo.array[idx])
 
 
+
+/* All entries in the file sysytem are of this type.  Currently, no
+   directories are supported. */
 
 struct file {
     ssize_t size; // -1: unknown from config file. <-1: factor of source size.
@@ -75,18 +128,23 @@ struct file {
     ssize_t srcSize; // -1: unknown from config file.
 };
 
-/* New file records are initialisedfrom here.  Values not set by the
-   user may be retrieved from the file system, or be made up. */
+/* New file records are initialised from here.  Values not set
+   explicitly by the user (via config) may be retrieved from the file
+   system, or be made up. */
+
 extern struct file uninitFile;
 
 
 
-struct parseResult {
+struct fileSystem {
     STACK(struct file *) files;
     avl_Tree names;
 };
 
 
+
+/* The algorithms implemented to generate file contents.  `algoRoot`
+   is only for the root directory. */
 
 enum { algoRoot, algoIntegers, algoChars };
 

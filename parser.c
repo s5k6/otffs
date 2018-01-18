@@ -2,12 +2,13 @@
 
 #include "common.h"
 #include "parser.h"
+#include <assert.h>
 #include <ctype.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include <limits.h>
 
 #define MAX_NAME_LENGTH 128
 #define READ_BUF_SIZE (1<<10)
@@ -30,11 +31,11 @@ struct {
 
 static size_t addFun(char *k, size_t v, size_t *o) {
     (void)v; (void)o;
-    errx(1, "Redefining file: %s", k);
+    errx(1, "Conflicting definition of file: %s", k);
     return 0;
 }
 
-int parse(struct parseResult *pr, int fd) {
+int parse(struct fileSystem *pr, int fd) {
 
     ssize_t n;
     char read_buf[READ_BUF_SIZE];
@@ -166,7 +167,7 @@ int parse(struct parseResult *pr, int fd) {
             case tPlain:
             case tQuoted:
                 name = AT(tok,t).str;
-                ERRIF(!name);
+                assert(name);
                 pState = pColon;
                 break;
             case tNewline:
@@ -281,8 +282,9 @@ int parse(struct parseResult *pr, int fd) {
                 {
                     char *e;
                     long int x = strtol(AT(tok,t).str, &e, 10);
-                    ERRIF(x == LONG_MIN || x == LONG_MAX);
-                    ERRIF(x < 0);
+                    if (x < 0 || x == LONG_MAX)
+                        errx(1, "Invalid size before %ld:%ld",
+                             AT(tok,t).lin, AT(tok,t).col);
                     current->size = (ssize_t)x;
                     if (*e) {
                         off_t f = 0;
@@ -313,12 +315,10 @@ int parse(struct parseResult *pr, int fd) {
                 {
                     char *e;
                     long int x = strtol(AT(tok,t).str, &e, 10);
-                    ERRIF(x == LONG_MIN || x == LONG_MAX);
-                    ERRIF(x < 0);
-                    current->mtime = x;
-                    if (*e)
+                    if (x < 0 || x == LONG_MAX || *e)
                         errx(1, "Invalid unix time `%s` before %ld:%ld",
                              AT(tok,t).str, AT(tok,t).lin, AT(tok,t).col);
+                    current->mtime = x;
                     pState = pNext;
                 }
                 break;
@@ -335,13 +335,10 @@ int parse(struct parseResult *pr, int fd) {
                 {
                     char *e;
                     long int x = strtol(AT(tok,t).str, &e, 8);
-                    ERRIF(x == LONG_MIN || x == LONG_MAX);
-                    ERRIF(x < 0 || 0777 < x);
-                    current->mode = (mode_t)x;
-                    if (*e)
+                    if (x < 0 || 0777 < x || *e)
                         errx(1, "Invalid file mode `%s` before %ld:%ld",
                              AT(tok,t).str, AT(tok,t).lin, AT(tok,t).col);
-                    current->mode = S_IFREG | (current->mode & 0777);
+                    current->mode = S_IFREG | (mode_t)(x & 0777);
                     pState = pNext;
                 }
                 break;

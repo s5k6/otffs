@@ -1,89 +1,190 @@
 
-`otfFS` — File system of on-the-fly test data
-=============================================
+OTFFS — File system of on-the-fly test data
+===========================================
 
-Goal
-----
-
-Provide arbitrarily large files of pseudo-random test data, without
-consuming disk space.
+When named pipes are not enough: Provide arbitrarily large files of
+pseudo-random test data, without consuming disk space.
 
 Use case:
 
-    $ curl 'http://localhost:8080/mnt/data3' | cmp - ./mnt/data3
+    $ curl 'http://localhost:8080/data/file3' | cmp - ./data/file3
 
-You don't want to create these files on your SSD:
+For testing, you don't want to create these files on your SSD (to be
+fair: you don't want to force `file5` through a web server either):
 
-    $ ls -l mnt
-    -r--r--r-- 1 sk users 4.1k Jan  1 21:09 data1
-    -r--r--r-- 1 sk users 4.2M Jan  1 21:09 data2
-    -r--r--r-- 1 sk users 4.3G Jan  1 21:09 data3
-    -r--r--r-- 1 sk users 4.4T Jan  1 21:09 data4
-    -r--r--r-- 1 sk users 4.6P Jan  1 21:09 data5
+    $ ls -l data
+    -r--r--r-- 1 sk users 4.1k Jan  1 21:09 file1
+    -r--r--r-- 1 sk users 4.2M Jan  1 21:09 file2
+    -r--r--r-- 1 sk users 4.3G Jan  1 21:09 file3
+    -r--r--r-- 1 sk users 4.4T Jan  1 21:09 file4
+    -r--r--r-- 1 sk users 4.6P Jan  1 21:09 file5
 
-Plan: Use FUSE [1] to provide a file system, which is backed by an
-executable instead of disk space.  Reading from a file in this
+Plan: Use FUSE [1] to provide a file system which is backed by an
+executable instead of disk space.  Reading from a fake file in this
 on-the-fly FS delivers test data, which may be generated
-algorithmically, or be provided by a concatenation of sufficiently
-many copies of a given source file.  Thus, every read at the same
-offset of the same file will produce the same data.
+algorithmically or be provided by a concatenation of sufficiently many
+copies of a given source file.  Thus, every read from the same offset
+of the same fake file will produce the same data.
+
+NOTE: For most cases it is probably simpler to use a named pipe and a
+script creating test data, see mkfifo(1) and cmp(1):
+
+    $ mkfifo pipe
+    $ generator >pipe&
+    $ generator | expectedTransform | cmp - <(programBeingTested pipe)
+
+OTFFS is for cases where a named pipe with all its caveats is not
+useful, e.g., if the tested program examines file metadata, or seeks
+into the provided file, or an unknown number of readers exist...
 
 
 Using it
 --------
 
-    $ make
+Requirements: libfuse version 3, see [1].
 
-Create mountpoint directory, and create a config file maned `otffsrc`
-below that.  Maybe add further source files.  An example directory
-`mnt/otffsrc` is provided.  To use it, do:
+Building:  Simply `make`, maybe followed by `make test`.
 
-    $ ls -l -h mnt/
+Then create a mountpoint directory (this is where the fake files will
+appear in), and create a config file named `otffsrc` below that.
+Maybe add further source files, see below.  An example setup is
+provided with the `demo` directory.  To use it:
+
+    $ ls -l -h demo/
     total 8.0K
-    -rw------- 1 sk users 1.2K Jan 11 16:33 otffsrc
-    -rw------- 1 sk users  455 Jan 11 18:38 template
+    -rw------- 1 sk users 1.6K Jan 18 12:20 otffsrc
+    -rw------- 1 sk users  455 Jan 18 12:20 template
 
-    $ ./otffs ./mnt
+    $ ./otffs ./demo
+    otffs: This is  On The Fly File System  version <whatever>.
 
-Open a second terminal, and
+More output will appear when you access the file system...
 
-    $ ls -l -h mnt/
+Open a second terminal, and:
+
+    $ ls -l -h demo/
     total 8.1E
-    -rw------- 1 sk users 8.0E Jan 11 18:38 excessive
-    -rw------- 1 sk users 2.3K Jan 11 18:38 five
-    -rw------- 1 sk users  16G Jan 15 22:03 integers
-    -rw------- 1 sk users 1.3G Jan 11 18:38 large
-    -rw-r----- 1 sk users  128 Jan 11 18:38 shorter
-    -rw------- 1 sk users  455 Jan  1  1970 template
+    -rw------- 1 sk users 245M Jan 20 00:17 chars
+    -rw------- 1 sk users 8.0E Jan 18 12:20 excessive
+    -rw------- 1 sk users 2.3K Jan 18 12:20 five
+    -rw------- 1 sk users  16G Jan 20 00:17 integers
+    -rw------- 1 sk users 1.3G Jan 18 12:20 large
+    -rw------- 1 sk users 1.6K Jan  1  1970 otffsrc
+    -rw-r----- 1 sk users  128 Jan 18 12:20 shorter
 
-To umount, do
+It is now a good idea to set up any backup tools to not span file
+systems unintentionally.  You can read and delete these files, but
+apart from that the FS is read-only.  Only the most basic FS functions
+are implemented currently, so some things won't work:
 
-    $ fusermount -u mnt/
+    $ touch demo/five
+    touch: setting times of 'demo/five': Function not implemented
 
-    $ ls -l -h mnt/
+To umount the FS, try
+
+    $ fusermount3 -u demo/
+    $ ls -l -h demo/
     total 8.0K
-    -rw------- 1 sk users 1.2K Jan 11 16:33 otffsrc
-    -rw------- 1 sk users  455 Jan 11 18:38 template
+    -rw------- 1 sk users 1.6K Jan 18 12:20 otffsrc
+    -rw------- 1 sk users  455 Jan 18 12:20 template
 
 
-The general format of `otffsrc` is a sequence of <line>s, matching
+Configuration
+-------------
 
-    <line> ::= <filename> `:` <how to produce it> (, <option>*)
-   
-    <filename> ::= <ascii characters>
-   
-    <how to produce it> ::= `pass` <source path>
+The general format of the `otffsrc` is a sequence of <line>s, matching
+the following grammar.  See `demo/otffsrc` for a well-documented
+example.
+
+    <line> ::= <filename> `:` <how to produce it> (`,` <option>)*
+
+    <filename> ::= <ascii letters and digits>+
+                |  `"`<some more characters are allowed>+`"`
+
+    <how to produce it> ::= `pass` <filename>
                          |  `fill` <algorithm>
-   
+
     <algorithm> ::= `integers`
-   
+                 |  `chars`
+
     <option> ::= `mtime` {decimal integer, seconds since epoch}
               |  `mode` {three octal digits}
               |  `size` {decimal integer}<suffix>?
-   
+
     <suffix> ::= `k` | `M` | `G` | `T` | `P` | `E`
                | `ki` | `Mi` | `Gi` | `Ti` | `Pi` | `Ei`
                | `x`
+
+The argument to `pass` is the name of a file under the mountpoint
+before running OTFFS.  The suffixes are the usual, based on 1024
+with `i` and on 1000 without `i`, the exception being `x` which
+indicates a factor of the source.
+
+
+Q: Why is there no PRNG (pseudo random number generator) to create
+   file contents?
+A: I don't see a way how this could be implemented nicely.  Let me
+   elaborate:
+
+Files are not necessarily read sequentially!  In fact, FUSE requires
+OTFFS to provide a function
+
+    void otf_read( …, size_t len, off_t off, …);
+
+which must reply with `len` bytes “read” from the file starting at
+offset `off`.  Thus, a request to read from a file may ask for any
+byte range.  To satisfy this request using a PRNG, OTFFS would need to
+calculate the file content using a known seed from a position before
+the requested range:
+
+Say we have a PRNG producing bytes with a period of `p`.  So we could
+partition the fake file into chunks of size `p`, each filled with the
+PRNGs output from a known per-chunk seed, maybe derived from the chunk
+number, or just use the same seed every time.
+
+To read some bytes from said file, starting at offset `o`, OTFFS would
+have to determine the last place before or at `o` with a known seed,
+which would be `(o / p) * p` (integer division rounds down).  From
+there, `o % p` many PRNG steps are required, only to get to the region
+that actually should be returned.  For large `p`, this may take some
+time.
+
+Of course, it would be easy to implement this under the *assumption*
+that reads occur sequentially, but I do apprehend the performance
+penalty (or the “Illegal seek” error) for not doing so.  Hence,
+anticipating arbitrary seeks into a file, using a PRNG with a really
+large period `p` does not make sense.
+
+For `p` much smaller then the fake file size, maybe `p < 10M`, it
+would probably be smart to calculate all of the PRNGs output once, and
+use that to fulfil all read requests.  This could happen on the first
+`open` of such a file, and memory could be freed on `release`.
+
+One could summon clever paging techniques.
+
+Until then, one can always do a precomputation of pseudo-random
+content, and store its output as a source file for OTFFS to use.
+OTFFS will map only those sections of this file into memory, which are
+required to reply to the read request at hand.  See mmap(3) and the
+io-vector technique described in writev(3).
+
+Example:
+
+    $ dd if=/dev/urandom bs=1  count=256 of=demo/shortPeriod
+    $ dd if=/dev/urandom bs=1k count=10k of=demo/longPeriod
+    $ cat <<. > demo/otffsrc
+    file1 : pass shortPeriod, size 1G
+    file2 : pass longPeriod, size 1G
+    .
+
+So here `file2` may use a large period (depending on the random
+source), but OTFFS has a memory footprint way less than the 10MiB of
+the source file.  I have measured (see time(1))
+
+    $ time -f maxRss=%MkB ./otffs demo/
+    maxRss=2416kB
+
+while reading both files in a separate terminal using md5sum(1).
 
 
 Common error messages
@@ -102,11 +203,12 @@ Compilation:
     You need to have the header files for fuse3 installed.  And of
     course your kernel must support FUSE.
 
-Runtime:
+Run-time:
 
   * “fuse: device not found, try 'modprobe fuse' first”
 
-    Have you upgraded the kernel?  Reboot.
+    Have you upgraded your system recently?  Maybe the module
+    directory has changed.  Reboot.  FIXME: there must be a nicer way.
 
   * “The source `foo` is too short (29B).  Request of 65536B for `bar`
     needs IOVEC of size 2260, limit is 1024!”
@@ -118,39 +220,27 @@ Runtime:
     See readv(2) and look for `IOV_MAX`.  You can solve this problem
     by providing a source `foo` for which
 
-                             max amount of data req'd by read
-        filesize of foo  >  ----------------------------------
-                                        IOV_MAX
+                              max amount of data req'd by read
+        file-size of foo  >  ----------------------------------
+                                          IOV_MAX
 
     holds.
 
   * “cannot access 'mnt': Transport endpoint is not connected”
 
-    The `otffs` process crashed, abd the OS still thinks the
+    The OTFFS process crashed, and the OS still thinks the
     mountpoint is mounted.  Umount the mountpoint, using
 
-        $ fusermount -u mnt
+        $ fusermount3 -u mnt
 
 
-Learning from others
-====================
+Legal
+-----
 
-    $ https://github.com/libfuse/libfuse.git
-    $ cd libfuse/example/
-    $ gcc -Wall hello.c $(pkg-config fuse3 --cflags --libs) -o hello
-
-Make mountpoint `mnt`.  Run in foreground (`-f`), and set user and
-group from the `mnt` directory.  Maybe do this in a separate terminal:
-
-    $ mkdir mnt
-    $ ./hello -f $(stat -c '-o uid=%u -o gid=%g' mnt) mnt
-
-Umounting is by terminating the program (through an exit handler it
-has installed), or through
-
-    $ fusermount -u mnt
-
-
+OTFFS — File system of on-the-fly test data.  Copyright © 2018 Stefan
+Klinger <http://stefan-klinger.de>.  You should have received a copy
+of the GNU General Public License along with this program.  If not,
+see <https://www.gnu.org/licenses/>.
 
 ____________________
 [1] https://github.com/libfuse/libfuse/

@@ -1,0 +1,12 @@
+#!/bin/bash
+set -u -e -C;
+
+fusermount3 -u mnt;
+
+count=0;
+while mountpoint mnt >/dev/null; do
+    sleep 0.1;
+    if test "$((count++))" -gt 10; then exit 1; fi;
+done;
+
+exit 0;

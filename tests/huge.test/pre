@@ -1,0 +1,35 @@
+#!/bin/bash
+set -u -e -C;
+shopt -s nullglob;
+
+repo="$(git rev-parse --show-toplevel)";
+
+mkdir -p mnt;
+
+dd if=/dev/urandom of=mnt/template bs=1k count=$((RANDOM % 100 + 1))
+os="$(stat -c%s "mnt/template")";
+
+md5sum mnt/template >| md5.tmp
+
+cat <<EOF >|mnt/otffsrc;
+template : pass
+EOF
+
+function size {
+    echo "\"size-${1}\" : pass template, size ${1}"
+}
+for j in {1..3}; do
+    size $((RANDOM % 1024));
+    size $((RANDOM % os));
+    for i in '' k M G T P; do
+        size "$((RANDOM % 1000))${i}";
+    done;
+    for i in ki Mi Gi Ti Pi; do
+        size "$((RANDOM % 1024))${i}";
+    done;
+    size "$((RANDOM % 100000))x";
+done |sort -k1,1 -u >>mnt/otffsrc;
+
+$repo/tests/mount-mnt
+
+md5sum -c md5.tmp

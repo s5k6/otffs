@@ -1,0 +1,21 @@
+#!/bin/bash
+set -u -e -C;
+
+for i in mnt/*; do
+    tmp="$(basename "$i").tmp";
+    >| "${tmp}"
+    for j in {1..10}; do
+        md5sum "$i" >>"${tmp}" &
+    done;
+done;
+
+wait
+
+for i in mnt/*; do
+    tmp="$(basename "$i").tmp";
+    if ! sort "${tmp}" | uniq -c |
+            grep -Exq "\s*10\s+\S+\s+${i}"; then
+        echo "Wrong checksum in ${tmp}" >&2;
+        exit 1;
+    fi;
+done;

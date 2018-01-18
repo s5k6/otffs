@@ -1,0 +1,2 @@
+pass : pass "template.tmp", size 1M
+gen : fill chars, size 1M

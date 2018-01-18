@@ -3,6 +3,6 @@
 
 #include "common.h"
 
-int parse(struct parseResult *parseResult, int fd);
+int parse(struct fileSystem *parseResult, int fd);
 
 #endif

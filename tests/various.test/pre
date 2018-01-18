@@ -1,0 +1,8 @@
+#!/bin/bash
+set -u -e -C;
+shopt -s nullglob;
+
+repo="$(git rev-parse --show-toplevel)";
+
+test -e mnt/template.tmp || dd if=/dev/urandom bs=1k count=1 of=mnt/template.tmp
+$repo/tests/mount-mnt

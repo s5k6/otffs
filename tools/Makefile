@@ -5,12 +5,11 @@ dep = $(patsubst %.c,%.d,$(src))
 
 version = "$(shell git describe --dirty --always --tags)"
 
-targets = otffs
+targets = cmprep parsetest manyopen
 
 .PHONY: all clean distclean test
 
 all : $(targets)
-	@echo 'Now maybe try `make test`.'
 
 clean:
 	rm -f $(obj) $(dep)
@@ -18,27 +17,16 @@ clean:
 distclean: 
 	git clean -xdf .
 
-test : otffs
-	$(MAKE) -C tools
-	tests/run 2>test.log
-
 include $(dep)
 
 %.d : %.c
 	gcc @cflags -MM $< > $@
 
-otffs : otffs.o fmap.o parser.o avl_tree.o common.o
-	gcc -o $@ $(shell pkg-config fuse3 --libs) $^
-	strip $@
-
-cmprep : cmprep.o fmap.o
+cmprep : cmprep.o ../fmap.o
 	gcc -o $@ @cflags $^
 
-parsetest: parsetest.o parser.o avl_tree.o common.o
+parsetest: parsetest.o ../parser.o ../avl_tree.o ../common.o
 	gcc -o $@ @cflags $^
-
-otffs.o : otffs.c
-	gcc @cflags -DVERSION='$(version)' $(shell pkg-config fuse3 --cflags) -c $<
 
 %.o : %.c
 	gcc @cflags -c $<

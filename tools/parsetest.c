@@ -1,8 +1,8 @@
-#include "parser.h"
-#include "common.h"
 #include "avl_tree.h"
-#include <stdio.h>
+#include "common.h"
+#include "parser.h"
 #include <fcntl.h>
+#include <stdio.h>
 #include <unistd.h>
 
 
@@ -20,11 +20,11 @@ int listFun(char *name, size_t ino, struct file **files) {
 
 int main(void) {
 
-    struct parseResult pr;
+    struct fileSystem pr;
     pr.names = avl_new((avl_CmpFun)strcmp);
     ALLOCATE(pr.files, 8);
     {
-        int fd = open("mnt/otffsrc", O_RDONLY);
+        int fd = open("../demo/otffsrc", O_RDONLY);
         ERRIF(!fd);
         parse(&pr, fd);
         close(fd);

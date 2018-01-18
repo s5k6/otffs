@@ -1,5 +1,6 @@
 #include "common.h"
 
+/* See `common.h` for documentation. */
 
 
 struct file uninitFile = {

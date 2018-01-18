@@ -1,0 +1,28 @@
+#!/bin/bash
+set -u -e -C;
+shopt -s nullglob;
+
+repo="$(git rev-parse --show-toplevel)";
+
+mkdir -p mnt
+
+# max date to try
+max="$(date -d'1 Jan 2100' +%s)";
+
+rm -f mnt/otffsrc;
+rm -f times.expect.tmp
+for i in {00..99}; do
+    t="$(shuf -n1 -i0-"$max")";
+    echo "\"file_$i\" : fill chars, mtime $t" >>mnt/otffsrc;
+    echo "mnt/file_$i $t" >>times.expect.tmp;
+done;
+
+$repo/tests/mount-mnt
+trap $repo/tests/umount-mnt EXIT
+
+rm -f times.found.tmp
+for i in {00..99}; do
+    stat -c'%n %Y' "mnt/file_$i" >>times.found.tmp;
+done;
+
+cmp times.expect.tmp times.found.tmp

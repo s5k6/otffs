@@ -1,0 +1,52 @@
+#!/bin/bash
+set -u -e -C;
+shopt -s nullglob;
+
+function err { echo $'\e[1;31m'"$@"$'\e[m'; exit 1; }
+function warn { echo $'\e[1;35m'"$@"$'\e[m'; }
+function info { echo $'\e[36m'"$@"$'\e[m'; }
+function fail { echo $'\e[1;31m'"Failed: $@"$'\e[m'; allok=false; }
+
+
+repo="$(git rev-parse --show-toplevel)";
+
+cd "${1:-${repo}/tests}";
+info "Entered $PWD";
+
+if test -x pre; then
+    ./pre || err "Failed to set up test suite";
+fi;
+
+allok=true;
+
+for t in *.test; do
+    test -x "$t" || continue;
+
+    if test -d "$t"; then
+
+        $repo/tests/run "$t" || allok=false;
+
+    else
+
+        b="$(basename "$t" .test)"
+        o="${b}.out";
+        e="${b}.err";
+
+        echo "running $t"
+        "./$t" >|"$o" 2>|"$e" || fail "running $t";
+
+    fi;
+
+done;
+
+if test -x post; then
+    ./post || warn "Ignored: failed to clean up test suite";
+fi;
+
+if "$allok"; then
+    info "All OK in $PWD";
+else
+    warn "Errors in $PWD";
+fi;
+
+"$allok";
