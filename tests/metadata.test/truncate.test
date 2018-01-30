@@ -1,0 +1,28 @@
+#!/bin/bash
+set -u -e -C;
+shopt -s nullglob;
+
+# max size to try
+max=$(( 10 << 20 ));
+
+repo="$(git rev-parse --show-toplevel)";
+base="$(basename "$0" .test)";
+
+mkdir -p mnt
+cat <<EOF >|mnt/otffsrc
+file1 : fill chars, size 0
+reference : fill chars, size 3x
+EOF
+$repo/tests/mount-mnt
+trap $repo/tests/umount-mnt EXIT
+
+dd='dd status=none iflag=count_bytes';
+for s in $(shuf -i 0-"${max}" -n50); do
+    
+    truncate -s "$s" mnt/file1;
+        
+    test "$(stat -c%s mnt/file1)" = "$s";
+
+    $repo/tools/cmprep mnt/reference mnt/file1;
+        
+done;

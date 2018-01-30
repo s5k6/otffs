@@ -3,26 +3,27 @@ set -u -e -C;
 shopt -s nullglob;
 
 repo="$(git rev-parse --show-toplevel)";
+base="$(basename "$0" .test)";
 
 mkdir -p mnt
 
-# max date to try
-max="$(date -d'1 Jan 2100' +%s)";
+# max size to try
+max=$(( 1 << 60 ));
 
 rm -f mnt/otffsrc;
-rm -f times.expect.tmp
+rm -f ${base}.expect.tmp
 for i in {00..99}; do
-    t="$(shuf -n1 -i0-"$max")";
-    echo "\"file_$i\" : fill chars, mtime $t" >>mnt/otffsrc;
-    echo "mnt/file_$i $t" >>times.expect.tmp;
+    s="$(shuf -n1 -i0-"$max")";
+    echo "\"file_$i\" : fill chars, size $s" >>mnt/otffsrc;
+    echo "mnt/file_$i $s" >>${base}.expect.tmp;
 done;
 
 $repo/tests/mount-mnt
 trap $repo/tests/umount-mnt EXIT
 
-rm -f times.found.tmp
+rm -f ${base}.found.tmp
 for i in {00..99}; do
-    stat -c'%n %Y' "mnt/file_$i" >>times.found.tmp;
+    stat -c'%n %s' "mnt/file_$i" >>${base}.found.tmp;
 done;
 
-cmp times.expect.tmp times.found.tmp
+cmp ${base}.expect.tmp ${base}.found.tmp

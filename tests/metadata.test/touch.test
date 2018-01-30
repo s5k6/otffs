@@ -1,0 +1,36 @@
+#!/bin/bash
+set -u -e -C;
+shopt -s nullglob;
+
+repo="$(git rev-parse --show-toplevel)";
+base="$(basename "$0" .test)";
+
+mkdir -p mnt
+
+cat <<EOF >|mnt/otffsrc
+file1 : fill chars, size 1x
+EOF
+$repo/tests/mount-mnt
+trap $repo/tests/umount-mnt EXIT
+
+rm -f "${base}.found.tmp" "${base}.expect.tmp"
+
+echo 'testing touch'
+for s in $(shuf -i 0-4673070342 -n50); do
+    now="$(date +%s)";
+    touch -d "@$s" mnt/file1 || exit 1;
+
+    r=($(stat -c'%X %Y %Z' mnt/file1));
+    (( r[0] == s && r[1] == s && r[2] - now < 2 )) || exit 1;
+done;
+
+echo 'testing touch -a'
+touch -d@1517398009 mnt/file1
+for s in $(shuf -i 0-4673070342 -n50); do
+    now="$(date +%s)";
+    touch -a -d "@$s" mnt/file1 || exit 1;
+
+    r=($(stat -c'%X %Y %Z' mnt/file1));
+    (( r[0] == s && r[1] == 1517398009 && r[2] - now < 2 )) || exit 1;
+done;
+

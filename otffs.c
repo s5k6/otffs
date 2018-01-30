@@ -471,6 +471,59 @@ static void otf_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
 
 
 
+/* Used by FUSE to change attributes.  This allows tochange file mode,
+   size, and time stamps, at runtime. */
+
+void otf_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
+                 int to_set, struct fuse_file_info *fi) {
+
+    (void)attr; (void)fi;
+
+    struct file *fp = AT(fs.files, ino);
+    
+    if (! fp) {
+        log("setattr(%ld) = EBADF", ino);
+        fuse_reply_err(req, EBADF);
+        return;
+    }
+
+    if ((FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID) & to_set) {
+        log("setattr(%ld, UID/GID) = EPERM", ino);
+        fuse_reply_err(req, EPERM);
+        return;
+    }
+
+    struct timespec now;
+    if (clock_gettime(CLOCK_REALTIME, &now))
+        now.tv_sec = 0;
+
+    fp->ctime = now.tv_sec;
+    
+    if (FUSE_SET_ATTR_MODE & to_set) fp->mode = attr->st_mode;
+    if (FUSE_SET_ATTR_SIZE & to_set) fp->size = attr->st_size;
+    if (FUSE_SET_ATTR_ATIME & to_set) fp->atime = attr->st_atime;
+    if (FUSE_SET_ATTR_MTIME & to_set) fp->mtime = attr->st_mtime;
+    if (FUSE_SET_ATTR_ATIME_NOW & to_set) fp->atime = now.tv_sec;
+    if (FUSE_SET_ATTR_MTIME_NOW & to_set) fp->mtime = now.tv_sec;
+
+    if (to_set & ~(
+        FUSE_SET_ATTR_MODE | FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID |
+        FUSE_SET_ATTR_SIZE | FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME |
+        FUSE_SET_ATTR_ATIME_NOW | FUSE_SET_ATTR_MTIME_NOW |
+        FUSE_SET_ATTR_CTIME
+    )) {
+        log("setattr(%ld, set=0x%X, ...) not implemented", ino, to_set);
+        fuse_reply_err(req, ENOSYS);
+    } else {
+        log("setattr(%ld, ...)", ino);
+        struct stat buf;
+        otf_stat(&buf, ino);
+        ERRIF(fuse_reply_attr(req, &buf, DEFAULT_TIMEOUT));
+    }
+}
+
+
+
 /* Tell FUSE which functions are implemented.  All of them must be
    defined above. */
 
@@ -482,6 +535,7 @@ static struct fuse_lowlevel_ops ops = {
     .readdir = otf_readdir,
     .release = otf_release,
     .unlink = otf_unlink,
+    .setattr = otf_setattr,
 };
 
 

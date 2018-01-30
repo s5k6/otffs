@@ -1,0 +1,20 @@
+#!/bin/bash
+set -u -e -C;
+shopt -s nullglob;
+
+repo="$(git rev-parse --show-toplevel)";
+base="$(basename "$0" .test)";
+
+mkdir -p mnt
+
+cat <<EOF >|mnt/otffsrc
+file1 : fill chars, size 1x
+EOF
+$repo/tests/mount-mnt
+trap $repo/tests/umount-mnt EXIT
+
+for d in $(shuf -i 0-511 -n50); do
+    m="$(printf '%03o' "$d")";
+    chmod "$m" mnt/file1 || exit 1;
+    test "$(stat -c%03a mnt/file1)" = "$m" || exit 1;
+done;
