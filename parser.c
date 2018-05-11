@@ -29,7 +29,7 @@ struct {
 };
 
 
-static size_t addFun(char *k, size_t v, size_t *o) {
+static size_t addFun(char *k, size_t v, size_t o) {
     (void)v; (void)o;
     errx(1, "Conflicting definition of file: %s", k);
     return 0;
